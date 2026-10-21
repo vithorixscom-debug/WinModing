@@ -12,8 +12,6 @@ import { open } from '@/helpers/dialog.js'
 import { getOS } from '@/helpers/utils.js'
 // import { getVersion } from '@tauri-apps/api/app'
 import { get_user, purge_cache_types } from '@/helpers/cache.js'
-import { curseforgeKeySet, saveCurseforgeKey } from '@/helpers/integrations.js'
-
 import ConfirmModalWrapper from '@/components/ui/modal/ConfirmModalWrapper.vue'
 import { useI18n } from '@/helpers/i18n.js'
 
@@ -185,23 +183,6 @@ async function purgeCache() {
 await getRemote(false, false)
 await getBranches()
 
-const curseforgeKey = ref('')
-const curseforgeSaved = ref(false)
-const keysSaving = ref(false)
-curseforgeSaved.value = Boolean(await curseforgeKeySet().catch(() => false))
-
-async function persistCurseforge() {
-  keysSaving.value = true
-  try {
-    await saveCurseforgeKey(curseforgeKey.value)
-    curseforgeSaved.value = true
-    curseforgeKey.value = ''
-  } catch (err) {
-    handleError(err)
-  } finally {
-    keysSaving.value = false
-  }
-}
 </script>
 
 <template>
@@ -383,23 +364,6 @@ async function persistCurseforge() {
           @update:model-value="settings.catalog_page_size = Number($event) || 20"
         />
       </div>
-      <label for="cf-api-key">
-        <span class="label__title">{{ i18n('settings.curseforgeKey') }}</span>
-        <span class="label__description">
-          {{ curseforgeSaved ? i18n('settings.curseforgeKeyHintSet') : i18n('settings.curseforgeKeyHint') }}
-        </span>
-      </label>
-      <input
-        id="cf-api-key"
-        v-model="curseforgeKey"
-        type="password"
-        class="installation-input"
-        autocomplete="off"
-        :placeholder="curseforgeSaved ? '••••' : 'x-api-key'"
-      />
-      <Button :disabled="keysSaving || !curseforgeKey.trim()" @click="persistCurseforge">
-        {{ i18n('settings.curseforgeSave') }}
-      </Button>
     </Card>
     <Card>
       <div class="label">

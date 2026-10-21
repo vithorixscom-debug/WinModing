@@ -1,9 +1,9 @@
 [package]
 name = "winmoding"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.77"
-description = "WinModing — Windows Minecraft launcher"
+description = "WinModing — Modrinth-based Minecraft launcher with CurseForge"
 license = "GPL-3.0-only"
 publish = false
 

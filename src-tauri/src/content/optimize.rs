@@ -59,8 +59,7 @@ pub async fn install_optimization_mods(
         }
     }
     let api_key = paths.read_curseforge_key();
-    if !api_key.trim().is_empty() && matches!(loader_key.as_str(), "fabric" | "quilt" | "neoforge")
-    {
+    if matches!(loader_key.as_str(), "fabric" | "quilt" | "neoforge") {
         match install_curseforge_flexible(
             http,
             paths,

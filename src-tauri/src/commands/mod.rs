@@ -47,9 +47,10 @@ pub use settings::{
     set_launcher_settings, should_disable_mouseover, show_window,
 };
 pub use system::{
-    __cmd__drag_window, __cmd__list_icon_gallery, __cmd__open_external,
+    __cmd__drag_window, __cmd__list_icon_gallery, __cmd__open_external, __cmd__read_image_data_url,
     __tauri_command_name_drag_window, __tauri_command_name_list_icon_gallery,
-    __tauri_command_name_open_external, drag_window, list_icon_gallery, open_external,
+    __tauri_command_name_open_external, __tauri_command_name_read_image_data_url, drag_window,
+    list_icon_gallery, open_external, read_image_data_url,
 };
 
 fn json_u64(value: &serde_json::Value) -> Option<u64> {
@@ -166,6 +167,9 @@ pub async fn create_instance(
     let record = build_instance_record(&request)?;
     let dir = state.paths.instance_dir(&record.id);
     ensure_instance_layout(&dir)?;
+    if !dir.join("icon.png").is_file() {
+        let _ = crate::content::assign_random_icon(&dir);
+    }
     let cache = state.cache.clone();
     drop(state);
     cache.insert_instance(record.clone()).await?;
@@ -182,6 +186,9 @@ pub async fn create_instance_and_install(
     let mut record = build_instance_record(&request)?;
     let dir = state.paths.instance_dir(&record.id);
     ensure_instance_layout(&dir)?;
+    if !dir.join("icon.png").is_file() {
+        let _ = crate::content::assign_random_icon(&dir);
+    }
     let http = state.http.clone();
     let paths = state.paths.clone();
     let cache = state.cache.clone();

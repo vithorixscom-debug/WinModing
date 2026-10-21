@@ -1,8 +1,8 @@
 # WinModing
 
-Windows Minecraft launcher built with Rust, Tauri v2, and Vue 3.
+**A Modrinth-based Minecraft launcher with CurseForge.**
 
-WinModing keeps each profile in its own folder, talks to Modrinth and CurseForge from one catalog, and can show Discord Rich Presence while you play Minecraft.
+WinModing is a Windows desktop fork of the Modrinth App UI (Theseus / AstralRinth), with Modrinth and CurseForge in one catalog. No API keys to paste. Microsoft login uses the public Minecraft client.
 
 <p align="center">
   <img src="src-tauri/icons/icon-256.png" alt="WinModing" width="128" height="128">
@@ -10,22 +10,23 @@ WinModing keeps each profile in its own folder, talks to Modrinth and CurseForge
 
 ![WinModing](docs/screenshots/mods.png)
 
-## Features
+## What you get
 
-- Search and install mods from **Modrinth**, **CurseForge**, or both
-- Fabric, Quilt, Forge, and NeoForge profiles (Fabric/Quilt install is wired today)
-- Isolated instances: mods, saves, and config stay per-profile
-- Microsoft / Ely.by / offline accounts (Microsoft sign-in opens a login window; no Azure app is required)
-- Discord Rich Presence only while Minecraft is running (`Playing Minecraft`)
-- Playtime on the instance profile, in hours
+- **Modrinth + CurseForge** in the same Browse tab (or one site at a time)
+- Isolated profiles: mods, saves, and config stay per instance
+- Fabric, Quilt, Forge, and NeoForge (Fabric/Quilt install is wired today)
+- Microsoft, Ely.by, and offline accounts — no Azure app setup
+- Discord shows **Playing Minecraft** only while the game is running
+- Playtime on the profile, in hours
 - Optional Fabric auto-optimize pack when you create a profile
+- No telemetry, analytics, or ads
 
 ## Requirements
 
 - Windows 10 or 11
 - [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
-- Rust 1.77 or newer
-- Node.js LTS (20+)
+
+To build from source: Rust 1.77+ and Node.js 20+.
 
 ## Build
 
@@ -43,26 +44,7 @@ npm install --legacy-peer-deps
 npm run tauri dev
 ```
 
-The release binary is `src-tauri/target/release/WinModing.exe`. Bundled installers are produced with `npm run tauri build`.
-
-CI never injects API keys. A CurseForge key compiled into the binary can be extracted from a public release.
-
-## Keys and setup
-
-Do not commit real values. Copy `.env.example` to `.env` only on your machine. All `WINMODING_*` values are read at **runtime**.
-
-| What | Environment | File under `%LOCALAPPDATA%\WinModing\meta\` |
-| --- | --- | --- |
-| CurseForge API | `WINMODING_CF_KEY` | `curseforge.key` (also Settings → Catalog) |
-| Optional Azure public client id | `WINMODING_MS_CLIENT_ID` | `microsoft.client_id` |
-| Discord image (https URL) | `WINMODING_DISCORD_IMAGE` | `discord.image` |
-| Discord application id | `WINMODING_DISCORD_CLIENT_ID` | `discord.client_id` |
-
-Microsoft login uses the public Minecraft Xbox client and a desktop redirect by default. Set `WINMODING_MS_CLIENT_ID` only if you want your own Azure loopback app.
-
-CurseForge search needs **your** Eternal API key. Paste it in Settings. WinModing does not ship a key.
-
-Discord: while Minecraft is running the profile shows **Playing Minecraft**. Voice overlay uses Minecraft's Discord application (not Modrinth). Optional custom artwork: host `docs/branding/discord-presence.png` (for example from GitHub Releases) and put the https URL in `discord.image`. Put your own Discord application id in `discord.client_id` if you want a custom voice icon; Modrinth/Theseus ids are ignored.
+The release binary is `WinModing.exe`. Bundled installers: `npm run tauri build`.
 
 ## User data
 
@@ -70,7 +52,6 @@ Discord: while Minecraft is running the profile shows **Playing Minecraft**. Voi
 | --- | --- |
 | `%LOCALAPPDATA%\WinModing` | Instances, Java runtimes, metadata, database |
 | `%LOCALAPPDATA%\WinModing\instances\<id>` | One Minecraft profile |
-| `%LOCALAPPDATA%\WinModing\meta` | Libraries, assets, versions, API keys |
 
 ## Disclaimer
 

@@ -224,7 +224,7 @@ import { computed, onUnmounted, ref, shallowRef } from 'vue'
 import { get_loaders } from '@/helpers/tags'
 import { create } from '@/helpers/profile'
 import { open } from '@/helpers/dialog.js'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { get_game_versions, get_loader_versions } from '@/helpers/metadata'
 import { handleError } from '@/store/notifications.js'
 import { useI18n } from '@/helpers/i18n.js'
@@ -239,7 +239,6 @@ import {
 import ProgressBar from '@/components/ui/ProgressBar.vue'
 import IconEditorModal from '@/components/ui/IconEditorModal.vue'
 import { bakeIconPng, randomIconPair } from '@/helpers/bakeIcon.js'
-import { invoke } from '@tauri-apps/api/core'
 
 const profile_name = ref('')
 const game_version = ref(null)
@@ -381,7 +380,21 @@ const create_instance = async () => {
 const onIconSaved = (path, dataUrl) => {
   if (!path && !dataUrl) return
   icon.value = path || icon.value
-  display_icon.value = dataUrl || (path ? convertFileSrc(path) : display_icon.value)
+  display_icon.value =
+    dataUrl || (typeof path === 'string' && path.startsWith('data:') ? path : display_icon.value)
+  if (!display_icon.value && path) {
+    invoke('read_image_data_url', { path })
+      .then((url) => {
+        display_icon.value = url
+      })
+      .catch(() => {
+        try {
+          display_icon.value = convertFileSrc(path)
+        } catch {
+          /* keep previous preview */
+        }
+      })
+  }
 }
 
 const random_icon = async () => {

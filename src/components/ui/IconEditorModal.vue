@@ -146,7 +146,16 @@ const recents = ref(loadRecentIconConfigs())
 onMounted(async () => {
   try {
     const rows = (await invoke('list_icon_gallery')) || []
-    gallery.value = rows.map((path) => ({ path, src: convertFileSrc(path) }))
+    gallery.value = rows
+      .map((item) => {
+        if (item && typeof item === 'object') {
+          return { path: item.path, src: item.dataUrl || item.data_url }
+        }
+        const path = String(item || '')
+        if (!path) return null
+        return { path, src: path.startsWith('data:') ? path : convertFileSrc(path) }
+      })
+      .filter((item) => item?.src)
   } catch {
     gallery.value = []
   }
@@ -187,8 +196,9 @@ async function pickFile() {
   })
   const path = value?.path ?? value
   if (!path) return
+  const dataUrl = await invoke('read_image_data_url', { path }).catch(() => null)
   if (props.instanceId) await edit_icon(props.instanceId, path)
-  emit('saved', path)
+  emit('saved', path, dataUrl)
   hide()
 }
 

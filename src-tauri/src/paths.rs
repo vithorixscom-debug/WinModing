@@ -205,12 +205,31 @@ fn adopt_legacy_sqlite(root: &Path) {
     }
 }
 
+fn folder_has_instance_data(dir: &Path) -> bool {
+    let instances = dir.join("instances");
+    let has_instance_folder = instances.is_dir()
+        && std::fs::read_dir(&instances)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+    has_instance_folder
+        || dir.join("winmoding.db").is_file()
+        || dir.join("winlauncher.db").is_file()
+        || dir.join("winmods.db").is_file()
+}
+
+/// Keep a custom data dir when it actually holds profiles. Ignore empty leftover
+/// product folders from older names so new installs stay under WinModing.
 fn sanitize_custom_dir(dir: PathBuf) -> Option<PathBuf> {
+    if !dir.exists() {
+        return None;
+    }
     let name = dir
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("");
-    if name.eq_ignore_ascii_case("WinMods") || name.eq_ignore_ascii_case("WinLauncher") {
+    let leftover_name =
+        name.eq_ignore_ascii_case("WinMods") || name.eq_ignore_ascii_case("WinLauncher");
+    if leftover_name && !folder_has_instance_data(&dir) {
         return None;
     }
     Some(dir)
@@ -250,10 +269,32 @@ mod tests {
     }
 
     #[test]
-    fn custom_dir_ignores_old_product_folders() {
+    fn custom_dir_ignores_missing_or_empty_old_product_folders() {
         assert!(
             sanitize_custom_dir(PathBuf::from(r"C:\Users\x\AppData\Local\WinLauncher")).is_none()
         );
-        assert!(sanitize_custom_dir(PathBuf::from(r"D:\Games\WinModing")).is_some());
+        let parent = std::env::temp_dir().join(format!("wm-empty-{}", uuid::Uuid::new_v4()));
+        let root = parent.join("WinLauncher");
+        fs::create_dir_all(&root).unwrap();
+        assert!(sanitize_custom_dir(root.clone()).is_none());
+        let _ = fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn custom_dir_keeps_old_product_folder_with_profiles() {
+        let parent = std::env::temp_dir().join(format!("wm-keep-{}", uuid::Uuid::new_v4()));
+        let root = parent.join("WinLauncher");
+        fs::create_dir_all(root.join("instances").join("pack")).unwrap();
+        assert_eq!(sanitize_custom_dir(root.clone()).as_ref(), Some(&root));
+        let _ = fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn custom_dir_keeps_unrelated_paths() {
+        let parent = std::env::temp_dir().join(format!("wm-other-{}", uuid::Uuid::new_v4()));
+        let root = parent.join("Games");
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(sanitize_custom_dir(root.clone()).as_ref(), Some(&root));
+        let _ = fs::remove_dir_all(parent);
     }
 }

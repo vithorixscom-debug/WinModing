@@ -11,8 +11,8 @@ use crate::domain::{
 use crate::error::LauncherError;
 use crate::net::HttpPool;
 use crate::protocol::{
-    curseforge_class_id, curseforge_loader_type, parse_github_repo, CURSEFORGE_API,
-    CURSEFORGE_MINECRAFT_GAME_ID, MODRINTH_API,
+    curseforge_class_id, curseforge_headers, curseforge_loader_type, parse_github_repo,
+    CURSEFORGE_API, CURSEFORGE_MINECRAFT_GAME_ID, MODRINTH_API,
 };
 
 const KNOWN_LOADERS: &[&str] = &["fabric", "forge", "neoforge", "quilt"];
@@ -103,13 +103,11 @@ impl ModProvider for CurseForgeProvider {
     }
 
     async fn search(&self, query: &CatalogQuery) -> Result<(Vec<UnifiedMod>, u64), LauncherError> {
-        if self.api_key.trim().is_empty() {
-            return Ok((Vec::new(), 0));
-        }
         let wanted = query.limit.max(1);
         let mut items = Vec::new();
         let mut offset = query.offset;
         let mut total = 0u64;
+        let auth = curseforge_headers(&self.api_key);
         while (items.len() as u32) < wanted {
             let mut slice = query.clone();
             slice.offset = offset;
@@ -117,12 +115,7 @@ impl ModProvider for CurseForgeProvider {
             let url = curseforge_search_url(&slice);
             let body = self
                 .http
-                .cached_text(
-                    &self.cache,
-                    &format!("curseforge:{url}"),
-                    &url,
-                    &[("x-api-key", self.api_key.as_str())],
-                )
+                .cached_text(&self.cache, &format!("curseforge:{url}"), &url, &auth)
                 .await?;
             let parsed: CfSearch =
                 serde_json::from_str(&body).map_err(|err| LauncherError::Provider {
@@ -362,10 +355,8 @@ async fn listed_on_curseforge(
     query: &CatalogQuery,
     item: &UnifiedMod,
 ) -> bool {
-    if curseforge.api_key.trim().is_empty() {
-        return false;
-    }
     let slug = item.slug.trim();
+    let auth = curseforge_headers(&curseforge.api_key);
     if !slug.is_empty() {
         let url = format!(
             "{CURSEFORGE_API}/mods/search?gameId={CURSEFORGE_MINECRAFT_GAME_ID}&slug={}&pageSize=5",
@@ -377,7 +368,7 @@ async fn listed_on_curseforge(
                 &curseforge.cache,
                 &format!("curseforge-exists:{slug}"),
                 &url,
-                &[("x-api-key", curseforge.api_key.as_str())],
+                &auth,
             )
             .await
         {

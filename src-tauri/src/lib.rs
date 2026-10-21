@@ -39,6 +39,14 @@ pub fn run() {
             let _ = app
                 .asset_protocol_scope()
                 .allow_directory(&state.paths.root, true);
+            if let Some(local) = dirs::data_local_dir() {
+                for name in ["WinModing", "WinLauncher"] {
+                    let dir = local.join(name);
+                    if dir.is_dir() {
+                        let _ = app.asset_protocol_scope().allow_directory(&dir, true);
+                    }
+                }
+            }
             if let Some(window) = app.get_webview_window("main") {
                 window::apply_native_material(&window);
                 if let Ok(icon) =
@@ -103,6 +111,7 @@ pub fn run() {
             commands::pick_path,
             commands::save_instance_icon_png,
             commands::list_icon_gallery,
+            commands::read_image_data_url,
             commands::analyze_crash,
             commands::add_play_seconds,
             commands::ignore_mod_update,

@@ -43,7 +43,7 @@ impl HttpPool {
         extra_headers: &[(&str, &str)],
     ) -> Result<String, LauncherError> {
         let mut last = None;
-        for candidate in alternate_urls(url) {
+        for candidate in alternate_urls(url, extra_headers) {
             match self.get_text_once(&candidate, extra_headers).await {
                 Ok(body) => return Ok(body),
                 Err(err) if err.should_try_mirror() => last = Some(err),
@@ -146,7 +146,7 @@ impl HttpPool {
 
     pub async fn download_to(&self, url: &str, dest: &Path) -> Result<(), LauncherError> {
         let mut last = None;
-        for candidate in alternate_urls(url) {
+        for candidate in alternate_urls(url, &[]) {
             match self.download_to_once(&candidate, dest).await {
                 Ok(()) => return Ok(()),
                 Err(err) if err.should_try_mirror() => last = Some(err),
@@ -216,7 +216,7 @@ impl HttpPool {
         }
         let partial = partial_path(dest);
         let mut last_error = LauncherError::Message("download did not start".into());
-        for candidate in alternate_urls(url) {
+        for candidate in alternate_urls(url, &[]) {
             for attempt in 1..=MAX_ATTEMPTS {
                 match self.download_once(&candidate, &partial, expected).await {
                     Ok(()) => {
@@ -383,7 +383,13 @@ fn push_unique(out: &mut Vec<String>, next: String) {
     }
 }
 
-fn alternate_urls(url: &str) -> Vec<String> {
+fn has_curseforge_key(extra_headers: &[(&str, &str)]) -> bool {
+    extra_headers
+        .iter()
+        .any(|(name, value)| name.eq_ignore_ascii_case("x-api-key") && !value.trim().is_empty())
+}
+
+fn alternate_urls(url: &str, extra_headers: &[(&str, &str)]) -> Vec<String> {
     let mut out = vec![url.to_string()];
     if let Some(rest) = url.strip_prefix("https://api.modrinth.com/v2") {
         push_unique(
@@ -398,10 +404,13 @@ fn alternate_urls(url: &str) -> Vec<String> {
         );
     }
     if let Some(rest) = url.strip_prefix("https://api.curseforge.com/v1") {
-        push_unique(
-            &mut out,
-            format!("https://mod.mcimirror.top/curseforge/v1{rest}"),
-        );
+        let mirror = format!("https://mod.mcimirror.top/curseforge/v1{rest}");
+        if has_curseforge_key(extra_headers) {
+            push_unique(&mut out, mirror);
+        } else {
+            // No user key: hit the public meta mirror first, official API second.
+            out.insert(0, mirror);
+        }
     }
     if url.contains("edge.forgecdn.net") {
         push_unique(
@@ -507,5 +516,24 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), b"hello");
         assert!(!partial.exists());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn curseforge_without_key_tries_mirror_first() {
+        let url = "https://api.curseforge.com/v1/mods/search?gameId=432";
+        let order = alternate_urls(url, &[]);
+        assert_eq!(
+            order[0],
+            "https://mod.mcimirror.top/curseforge/v1/mods/search?gameId=432"
+        );
+        assert_eq!(order[1], url);
+    }
+
+    #[test]
+    fn curseforge_with_key_keeps_official_first() {
+        let url = "https://api.curseforge.com/v1/mods/search?gameId=432";
+        let order = alternate_urls(url, &[("x-api-key", "secret")]);
+        assert_eq!(order[0], url);
+        assert!(order.iter().any(|item| item.contains("mcimirror.top")));
     }
 }

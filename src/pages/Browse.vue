@@ -19,7 +19,7 @@ import { get_categories, get_loaders, get_game_versions } from '@/helpers/tags'
 import { useRoute, useRouter } from 'vue-router'
 import SearchCard from '@/components/ui/SearchCard.vue'
 import { get as getInstance, get_projects as getInstanceProjects } from '@/helpers/profile.js'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { instanceIconSrc } from '@/helpers/instanceIcon.js'
 import { get_catalog_results, catalogItemToHit, catalogQueryText } from '@/helpers/cache.js'
 import { debounce } from '@/helpers/utils.js'
 import { get as getSettings, set as setSettings } from '@/helpers/settings.js'
@@ -604,7 +604,7 @@ const isModProject = computed(() => ['modpack', 'mod'].includes(projectType.valu
       <Card v-if="instanceContext" class="small-instance">
         <router-link :to="`/instance/${encodeURIComponent(instanceContext.path)}`" class="instance">
           <Avatar
-            :src="instanceContext.icon_path ? convertFileSrc(instanceContext.icon_path) : null"
+            :src="instanceIconSrc(instanceContext)"
             :alt="instanceContext.name"
             size="sm"
           />

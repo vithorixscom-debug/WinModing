@@ -7,14 +7,15 @@ use crate::domain::{instance_id_is_safe, ResolvedFile};
 use crate::error::{io_at, LauncherError};
 use crate::net::HttpPool;
 use crate::paths::AppPaths;
-use crate::protocol::{curseforge_loader_type, parse_github_repo, CURSEFORGE_API, MODRINTH_API};
+use crate::protocol::{
+    curseforge_headers, curseforge_loader_type, parse_github_repo, CURSEFORGE_API, MODRINTH_API,
+};
 use crate::providers::{self, ModrinthApi, VersionSource};
 
 mod icons;
 mod optimize;
 mod paths;
 pub use icons::attach_icon_data;
-#[allow(unused_imports)]
 pub use icons::{assign_random_icon, file_data_url};
 pub use optimize::install_optimization_mods;
 use paths::{folder_for, index_path, options_path, relative_is_safe};
@@ -67,6 +68,8 @@ pub fn read_options(root: &Path) -> serde_json::Value {
 pub fn write_options(root: &Path, value: &serde_json::Value) -> Result<(), LauncherError> {
     let path = options_path(root);
     let mut map = value.as_object().cloned().unwrap_or_default();
+    map.remove("iconDataUrl");
+    map.remove("icon_data_url");
     if let Some(existing) = std::fs::read_to_string(&path)
         .ok()
         .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
@@ -753,7 +756,10 @@ async fn fetch_modrinth_icon(http: &HttpPool, id: &str) -> Option<String> {
 
 async fn fetch_curseforge_icon(http: &HttpPool, id: &str, api_key: &str) -> Option<String> {
     let url = format!("{CURSEFORGE_API}/mods/{id}");
-    let value: serde_json::Value = http.get_json(&url, &[("x-api-key", api_key)]).await.ok()?;
+    let value: serde_json::Value = http
+        .get_json(&url, &curseforge_headers(api_key))
+        .await
+        .ok()?;
     value
         .pointer("/data/logo/thumbnailUrl")
         .or_else(|| value.pointer("/data/logo/url"))
@@ -966,16 +972,13 @@ pub async fn install_curseforge(
     project_type: &str,
     api_key: &str,
 ) -> Result<Vec<String>, LauncherError> {
-    if api_key.trim().is_empty() {
-        return Err(LauncherError::Message("CurseForge key is missing".into()));
-    }
     let file = if let Some(file_id) =
         version_id.filter(|value| value.chars().all(|ch| ch.is_ascii_digit()))
     {
         let parsed: CfFileWrap = http
             .get_json(
                 &format!("{CURSEFORGE_API}/mods/{project_id}/files/{file_id}"),
-                &[("x-api-key", api_key)],
+                &curseforge_headers(api_key),
             )
             .await?;
         parsed.data
@@ -989,7 +992,7 @@ pub async fn install_curseforge(
             url.push_str("&modLoaderType=");
             url.push_str(&kind.to_string());
         }
-        let parsed: CfFiles = http.get_json(&url, &[("x-api-key", api_key)]).await?;
+        let parsed: CfFiles = http.get_json(&url, &curseforge_headers(api_key)).await?;
         parsed
             .data
             .into_iter()
@@ -1013,7 +1016,7 @@ pub async fn install_curseforge(
                     "{CURSEFORGE_API}/mods/{project_id}/files/{}/download-url",
                     file.id
                 ),
-                &[("x-api-key", api_key)],
+                &curseforge_headers(api_key),
             )
             .await?;
         download = lookup.data;
@@ -1144,7 +1147,7 @@ pub async fn catalog_project(
     let wanted = id.trim();
     if wanted.chars().all(|ch| ch.is_ascii_digit()) {
         let url = format!("{CURSEFORGE_API}/mods/{wanted}");
-        let value: serde_json::Value = http.get_json(&url, &[("x-api-key", api_key)]).await?;
+        let value: serde_json::Value = http.get_json(&url, &curseforge_headers(api_key)).await?;
         let data = value.get("data").cloned().unwrap_or(value);
         let title = data
             .pointer("/name")
@@ -1217,7 +1220,7 @@ pub async fn catalog_versions(
             url.push_str("&modLoaderType=");
             url.push_str(&kind.to_string());
         }
-        let parsed: CfFiles = http.get_json(&url, &[("x-api-key", api_key)]).await?;
+        let parsed: CfFiles = http.get_json(&url, &curseforge_headers(api_key)).await?;
         return Ok(parsed
             .data
             .into_iter()
@@ -1320,7 +1323,7 @@ pub async fn content_updates(
                 url.push_str(&kind.to_string());
             }
             match http
-                .get_json::<CfFiles>(&url, &[("x-api-key", api_key)])
+                .get_json::<CfFiles>(&url, &curseforge_headers(api_key))
                 .await
             {
                 Ok(parsed) => parsed
@@ -1516,7 +1519,7 @@ async fn lookup_curseforge_id(
         "{CURSEFORGE_API}/mods/search?gameId=432&slug={}&pageSize=5",
         urlencoding::encode(slug)
     );
-    let parsed: CfSearchIds = http.get_json(&url, &[("x-api-key", api_key)]).await?;
+    let parsed: CfSearchIds = http.get_json(&url, &curseforge_headers(api_key)).await?;
     parsed
         .data
         .into_iter()

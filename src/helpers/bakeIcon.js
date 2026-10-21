@@ -11,17 +11,11 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 async function loadImage(src) {
-  const response = await fetch(src)
-  const blob = await response.blob()
-  const url = URL.createObjectURL(blob)
-  try {
-    const image = new Image()
-    image.src = url
-    await image.decode()
-    return image
-  } finally {
-    URL.revokeObjectURL(url)
-  }
+  const image = new Image()
+  image.decoding = 'async'
+  image.src = src
+  await image.decode()
+  return image
 }
 
 export async function bakeIconPng(background, symbol) {

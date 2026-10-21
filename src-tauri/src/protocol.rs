@@ -2,12 +2,12 @@
 
 use crate::error::LauncherError;
 
-pub const USER_AGENT: &str = "WinModing/0.1.0 (desktop; windows)";
+pub const USER_AGENT: &str = "WinModing/0.2.0 (desktop; windows)";
 
 pub const MODRINTH_API: &str = "https://api.modrinth.com/v2";
 pub const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
 pub const CURSEFORGE_MINECRAFT_GAME_ID: u32 = 432;
-/// Runtime-only env. Never compile a CurseForge key into the binary.
+/// Runtime-only env. Never compile secrets into the binary.
 pub fn env_nonempty(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -102,7 +102,18 @@ pub const MC_PROFILE: &str = "https://api.minecraftservices.com/minecraft/profil
 pub const ADOPTIUM_ASSETS: &str = "https://api.adoptium.net/v3/assets/latest";
 
 pub const LAUNCHER_NAME: &str = "WinModing";
-pub const LAUNCHER_VERSION: &str = "0.1.0";
+pub const LAUNCHER_VERSION: &str = "0.2.0";
+
+/// CurseForge auth header when a key exists. Empty means public mirrors only —
+/// users are never asked to paste an Eternal API key.
+pub fn curseforge_headers(api_key: &str) -> Vec<(&'static str, &str)> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        Vec::new()
+    } else {
+        vec![("x-api-key", key)]
+    }
+}
 
 pub fn adoptium_jre_url(major: u32) -> String {
     format!(
@@ -202,5 +213,12 @@ mod tests {
     fn official_xbox_client_is_public_minecraft() {
         assert_eq!(MS_XBOX_PUBLIC_CLIENT, "00000000402b5328");
         assert_eq!(LAUNCHER_NAME, "WinModing");
+    }
+
+    #[test]
+    fn curseforge_headers_omitted_without_key() {
+        assert!(curseforge_headers("").is_empty());
+        assert!(curseforge_headers("   ").is_empty());
+        assert_eq!(curseforge_headers("abc"), vec![("x-api-key", "abc")]);
     }
 }
