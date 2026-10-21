@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  nsis:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Install Tauri CLI
+        run: npm install --save-dev --legacy-peer-deps @tauri-apps/cli
+
+      - name: Build NSIS installer
+        run: npm run tauri build
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/nsis/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

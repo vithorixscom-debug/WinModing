@@ -1,0 +1,21 @@
+﻿{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": false,
+    "jsx": "preserve",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "allowJs": true,
+    "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@modrinth/assets": ["./packages/assets"],
+      "@modrinth/ui": ["./packages/ui"],
+      "@modrinth/utils": ["./packages/utils"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.vue", "packages/**/*.ts"]
+}

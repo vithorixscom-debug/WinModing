@@ -1,0 +1,13 @@
+{
+  "name": "@modrinth/utils",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./index.ts",
+  "types": "./index.d.ts",
+  "dependencies": {
+    "dayjs": "^1.11.13",
+    "highlight.js": "^11.9.0",
+    "markdown-it": "^14.1.0",
+    "xss": "^1.0.15"
+  }
+}
