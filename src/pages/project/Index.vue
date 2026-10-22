@@ -50,7 +50,19 @@
           >
             <DownloadIcon v-if="!installed && !installing" />
             <CheckIcon v-else-if="installed" />
-            {{ installing ? 'Installing...' : installed ? 'Installed' : 'Install' }}
+            {{
+              installing
+                ? instance
+                  ? 'Installing...'
+                  : 'Saving...'
+                : installed
+                  ? instance
+                    ? 'Installed'
+                    : 'Saved'
+                  : instance
+                    ? 'Install'
+                    : 'Download'
+            }}
           </Button>
           <a
             :href="projectUrl(data.project_type, data.slug, data.source)"
@@ -347,9 +359,11 @@ async function install(version) {
       instance.value ? instance.value.path : null,
       source,
       (next) => {
-        if (instance.value && next) {
+        if (next) {
           installed.value = true
-          installedVersion.value = next === 'latest' ? version || installedVersion.value : next
+          if (instance.value) {
+            installedVersion.value = next === 'latest' ? version || installedVersion.value : next
+          }
         }
       },
       data.value,

@@ -4,6 +4,7 @@ import { handleError } from '@/store/notifications.js'
 import { get_project, get_version_many } from '@/helpers/cache.js'
 import { invoke } from '@tauri-apps/api/core'
 import { t } from '@/helpers/i18n.js'
+import { useNotifications } from '@/store/notifications.js'
 import dayjs from 'dayjs'
 
 export const useInstall = defineStore('installStore', {
@@ -47,7 +48,12 @@ function detectCatalog(projectId, source, projectHint = {}) {
   if (hint.includes('github') || passed.includes('github') || /github\.com/i.test(id)) {
     return 'github'
   }
-  if (hint.includes('curse') || passed.includes('curse')) {
+  if (
+    hint.includes('curse') ||
+    passed.includes('curse') ||
+    id.startsWith('cf-') ||
+    /^\d+$/.test(id.replace(/^cf-/i, ''))
+  ) {
     return 'curseforge'
   }
   return 'modrinth'
@@ -61,12 +67,39 @@ export const install = async (
   callback = () => {},
   projectHint = {},
 ) => {
+  const catalog = detectCatalog(projectId, source, projectHint)
+  const projectType = projectHint.project_type || projectHint.projectType || 'mod'
+  if (!instancePath) {
+    try {
+      const saved = await invoke('save_catalog_download', {
+        request: {
+          projectId: String(projectId),
+          versionId: versionId || null,
+          source: catalog,
+          projectType,
+        },
+      })
+      try {
+        const notifs = useNotifications()
+        notifs.addNotification({
+          title: t('install.savedTitle'),
+          text: saved?.path || t('install.savedText'),
+          type: 'success',
+        })
+      } catch {
+        /* ignore */
+      }
+      callback(versionId || 'latest')
+    } catch (error) {
+      handleError(error)
+    }
+    return
+  }
   const target = await resolveInstancePath(instancePath)
   if (!target) {
     handleError(new Error(t('install.needProfile')))
     return
   }
-  const catalog = detectCatalog(projectId, source, projectHint)
   try {
     await invoke('install_content', {
       request: {
@@ -74,7 +107,7 @@ export const install = async (
         projectId: String(projectId),
         versionId: versionId || null,
         source: catalog,
-        projectType: projectHint.project_type || projectHint.projectType || 'mod',
+        projectType,
       },
     })
     callback(versionId || 'latest')

@@ -1,7 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { ofetch } from "ofetch";
-
-const API = "https://api.modrinth.com/v2";
 
 export const FALLBACK_LOADERS = [
   { name: "fabric", supported_project_types: ["mod", "modpack"] },
@@ -66,26 +63,12 @@ export const FALLBACK_CATEGORIES = [
   ),
 ];
 
-function asCategoryList(data) {
-  return Array.isArray(data) && data.length > 0 ? data : FALLBACK_CATEGORIES;
-}
-
 export async function get_categories() {
-  try {
-    const data = await ofetch(`${API}/tag/category`);
-    return asCategoryList(data);
-  } catch {
-    return FALLBACK_CATEGORIES;
-  }
+  return FALLBACK_CATEGORIES;
 }
 
 export async function get_loaders() {
-  try {
-    const data = await ofetch(`${API}/tag/loader`);
-    return Array.isArray(data) && data.length > 0 ? data : FALLBACK_LOADERS;
-  } catch {
-    return FALLBACK_LOADERS;
-  }
+  return FALLBACK_LOADERS;
 }
 
 export async function get_game_versions() {
@@ -96,26 +79,14 @@ export async function get_game_versions() {
       version_type: item.type ?? item.versionType ?? item.version_type ?? "release",
     }));
   } catch {
-    try {
-      return await ofetch(`${API}/tag/game_version`);
-    } catch {
-      return [];
-    }
+    return [];
   }
 }
 
 export async function get_donation_platforms() {
-  try {
-    return await ofetch(`${API}/tag/donation_platform`);
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 export async function get_report_types() {
-  try {
-    return await ofetch(`${API}/tag/report_type`);
-  } catch {
-    return [];
-  }
+  return [];
 }

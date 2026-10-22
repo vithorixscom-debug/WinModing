@@ -83,10 +83,13 @@ impl LauncherError {
     }
 
     pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::Network { .. } | Self::NetworkInterrupted { .. } | Self::RateLimited { .. }
-        )
+        match self {
+            Self::Network { .. } | Self::NetworkInterrupted { .. } | Self::RateLimited { .. } => {
+                true
+            }
+            Self::Message(text) => text.contains("network request"),
+            _ => false,
+        }
     }
 
     pub fn should_try_mirror(&self) -> bool {
@@ -94,6 +97,7 @@ impl LauncherError {
             Self::Network { .. } | Self::NetworkInterrupted { .. } | Self::RateLimited { .. } => {
                 true
             }
+            Self::Message(text) => text.contains("network request"),
             Self::Provider { status, .. } => {
                 matches!(
                     *status,

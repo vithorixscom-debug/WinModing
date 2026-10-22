@@ -1,6 +1,6 @@
 [package]
 name = "winmoding"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.77"
 description = "WinModing — Modrinth-based Minecraft launcher with CurseForge"
@@ -28,7 +28,7 @@ log = "0.4"
 md-5 = "0.10"
 rand = "0.8"
 rayon = "1"
-reqwest = { version = "0.12", features = ["json", "stream", "gzip"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "gzip", "rustls-tls", "http2", "charset", "socks", "system-proxy"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -46,6 +46,9 @@ urlencoding = "2"
 uuid = { version = "1", features = ["v4"] }
 window-vibrancy = "0.6"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
 
 [features]
 default = ["custom-protocol"]

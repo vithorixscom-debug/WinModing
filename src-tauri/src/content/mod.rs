@@ -8,7 +8,9 @@ use crate::error::{io_at, LauncherError};
 use crate::net::HttpPool;
 use crate::paths::AppPaths;
 use crate::protocol::{
-    curseforge_headers, curseforge_loader_type, parse_github_repo, CURSEFORGE_API, MODRINTH_API,
+    curseforge_cdn_url, curseforge_headers, curseforge_loader_type, curseforge_numeric_id,
+    force_https, is_curseforge_id, parse_github_repo, CURSEFORGE_API, CURSEFORGE_ID_PREFIX,
+    MODRINTH_API,
 };
 use crate::providers::{self, ModrinthApi, VersionSource};
 
@@ -261,6 +263,7 @@ fn same_project(stored: &str, wanted: &str) -> bool {
             .trim_start_matches("modrinth:")
             .trim_start_matches("curseforge:")
             .trim_start_matches("github:")
+            .trim_start_matches("cf-")
             .to_string()
     }
     let stored = norm(stored);
@@ -542,6 +545,217 @@ async fn download_files(
     Ok(names)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedDownload {
+    pub path: String,
+    pub folder: String,
+    pub file_name: String,
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct LibraryIndex {
+    #[serde(default)]
+    files: Vec<LibraryItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LibraryItem {
+    project_id: String,
+    file_name: String,
+    folder: String,
+}
+
+fn library_index_path(paths: &AppPaths) -> std::path::PathBuf {
+    paths.downloads_dir().join("library.json")
+}
+
+fn read_library(paths: &AppPaths) -> LibraryIndex {
+    std::fs::read_to_string(library_index_path(paths))
+        .ok()
+        .and_then(|body| serde_json::from_str(&body).ok())
+        .unwrap_or_default()
+}
+
+fn write_library(paths: &AppPaths, index: &LibraryIndex) -> Result<(), LauncherError> {
+    let path = library_index_path(paths);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| io_at(parent, err))?;
+    }
+    let body = serde_json::to_string_pretty(index)
+        .map_err(|err| LauncherError::Message(err.to_string()))?;
+    std::fs::write(&path, body).map_err(|err| io_at(&path, err))
+}
+
+pub fn list_saved_project_ids(paths: &AppPaths) -> Vec<String> {
+    read_library(paths)
+        .files
+        .into_iter()
+        .map(|item| item.project_id)
+        .collect()
+}
+
+fn remember_library(paths: &AppPaths, project_id: &str, folder: &str, file_name: &str) {
+    let mut index = read_library(paths);
+    index
+        .files
+        .retain(|item| !item.project_id.eq_ignore_ascii_case(project_id));
+    index.files.push(LibraryItem {
+        project_id: project_id.to_string(),
+        file_name: file_name.to_string(),
+        folder: folder.to_string(),
+    });
+    let _ = write_library(paths, &index);
+}
+
+async fn resolve_modrinth_file(
+    http: &HttpPool,
+    project_id: &str,
+    version_id: Option<&str>,
+) -> Result<ResolvedFile, LauncherError> {
+    let version: serde_json::Value = if let Some(id) = version_id.filter(|value| !value.is_empty()) {
+        http.get_json(
+            &format!("{MODRINTH_API}/version/{}", urlencoding::encode(id)),
+            &[],
+        )
+        .await?
+    } else {
+        let versions: Vec<serde_json::Value> = http
+            .get_json(
+                &format!(
+                    "{MODRINTH_API}/project/{}/version",
+                    urlencoding::encode(project_id)
+                ),
+                &[],
+            )
+            .await?;
+        versions.into_iter().next().ok_or_else(|| {
+            LauncherError::Message(format!("no files for {project_id}"))
+        })?
+    };
+    let files = version
+        .get("files")
+        .and_then(|item| item.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let file = files
+        .iter()
+        .find(|item| item.get("primary").and_then(|value| value.as_bool()) == Some(true))
+        .or_else(|| files.first())
+        .ok_or_else(|| LauncherError::Message(format!("no files for {project_id}")))?;
+    let file_name = file
+        .get("filename")
+        .and_then(|item| item.as_str())
+        .unwrap_or("download.jar")
+        .to_string();
+    let url = file
+        .get("url")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| LauncherError::Message(format!("no download url for {project_id}")))?
+        .to_string();
+    let sha1 = file
+        .pointer("/hashes/sha1")
+        .and_then(|item| item.as_str())
+        .map(str::to_string);
+    Ok(ResolvedFile {
+        key: version
+            .get("id")
+            .and_then(|item| item.as_str())
+            .unwrap_or(project_id)
+            .to_string(),
+        project_id: project_id.to_string(),
+        file_name,
+        url,
+        sha1,
+    })
+}
+
+async fn resolve_curseforge_file(
+    http: &HttpPool,
+    project_id: &str,
+    version_id: Option<&str>,
+    api_key: &str,
+) -> Result<ResolvedFile, LauncherError> {
+    let project_id = curseforge_numeric_id(project_id);
+    let file = if let Some(file_id) =
+        version_id.filter(|value| curseforge_numeric_id(value).chars().all(|ch| ch.is_ascii_digit()))
+    {
+        let file_id = curseforge_numeric_id(file_id);
+        let parsed: CfFileWrap = http
+            .get_json(
+                &format!("{CURSEFORGE_API}/mods/{project_id}/files/{file_id}"),
+                &curseforge_headers(api_key),
+            )
+            .await?;
+        parsed.data
+    } else {
+        let parsed: CfFiles = http
+            .get_json(
+                &format!("{CURSEFORGE_API}/mods/{project_id}/files?pageSize=50"),
+                &curseforge_headers(api_key),
+            )
+            .await?;
+        pick_curseforge_file(parsed.data, "", "").ok_or_else(|| {
+            LauncherError::Message(format!("no CurseForge file for {project_id}"))
+        })?
+    };
+    let mut download = file
+        .download_url
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_default();
+    download = force_https(&download);
+    if download.is_empty() {
+        download = curseforge_cdn_url(file.id, &file.file_name);
+    }
+    let sha1 = file
+        .hashes
+        .iter()
+        .find(|hash| hash.algo == 1)
+        .map(|hash| hash.value.clone());
+    Ok(ResolvedFile {
+        key: file.id.to_string(),
+        project_id: format!("{CURSEFORGE_ID_PREFIX}{project_id}"),
+        file_name: file.file_name,
+        url: download,
+        sha1,
+    })
+}
+
+pub async fn save_catalog_download(
+    http: &HttpPool,
+    paths: &AppPaths,
+    project_id: &str,
+    version_id: Option<&str>,
+    source: &str,
+    project_type: &str,
+    api_key: &str,
+) -> Result<SavedDownload, LauncherError> {
+    let preferred = detect_source(source, project_id);
+    let slug = slug_of(project_id);
+    let file = if preferred == "curseforge" {
+        resolve_curseforge_file(http, &slug, version_id, api_key).await?
+    } else {
+        resolve_modrinth_file(http, &slug, version_id).await?
+    };
+    let folder = folder_for(project_type);
+    let dest_dir = paths.downloads_dir().join(folder);
+    let names = download_files(http, &dest_dir, std::slice::from_ref(&file)).await?;
+    let file_name = names
+        .into_iter()
+        .next()
+        .ok_or_else(|| LauncherError::Message(format!("could not save {project_id}")))?;
+    remember_library(paths, project_id, folder, &file_name);
+    let path = dest_dir.join(&file_name);
+    Ok(SavedDownload {
+        path: path.display().to_string(),
+        folder: dest_dir.display().to_string(),
+        file_name,
+        project_id: project_id.to_string(),
+    })
+}
+
 fn delete_indexed_file(root: &Path, folder: &str, file_name: &str) {
     let dest = root.join(folder).join(file_name);
     for path in [
@@ -777,7 +991,7 @@ pub fn detect_source(source: &str, project_id: &str) -> String {
         || parse_github_repo(project_id).is_some()
     {
         "github".into()
-    } else if source.contains("curse") {
+    } else if source.contains("curse") || is_curseforge_id(project_id) {
         "curseforge".into()
     } else {
         "modrinth".into()
@@ -875,7 +1089,7 @@ pub async fn install_any(
 fn slug_of(project_id: &str) -> String {
     parse_github_repo(project_id)
         .map(|(_, repo)| repo)
-        .unwrap_or_else(|| project_id.trim().to_string())
+        .unwrap_or_else(|| curseforge_numeric_id(project_id).to_string())
 }
 
 pub async fn install_modrinth(
@@ -972,9 +1186,11 @@ pub async fn install_curseforge(
     project_type: &str,
     api_key: &str,
 ) -> Result<Vec<String>, LauncherError> {
+    let project_id = curseforge_numeric_id(project_id);
     let file = if let Some(file_id) =
-        version_id.filter(|value| value.chars().all(|ch| ch.is_ascii_digit()))
+        version_id.filter(|value| curseforge_numeric_id(value).chars().all(|ch| ch.is_ascii_digit()))
     {
+        let file_id = curseforge_numeric_id(file_id);
         let parsed: CfFileWrap = http
             .get_json(
                 &format!("{CURSEFORGE_API}/mods/{project_id}/files/{file_id}"),
@@ -993,33 +1209,34 @@ pub async fn install_curseforge(
             url.push_str(&kind.to_string());
         }
         let parsed: CfFiles = http.get_json(&url, &curseforge_headers(api_key)).await?;
-        parsed
-            .data
-            .into_iter()
-            .find(|item| {
-                item.download_url
-                    .as_deref()
-                    .map(|value| !value.is_empty())
-                    .unwrap_or(false)
-            })
-            .ok_or_else(|| {
-                LauncherError::Message(format!(
-                    "no CurseForge file for {project_id} / {game_version}"
-                ))
-            })?
+        pick_curseforge_file(parsed.data, game_version, loader).ok_or_else(|| {
+            LauncherError::Message(format!(
+                "no CurseForge file for {project_id} / {game_version}"
+            ))
+        })?
     };
-    let mut download = file.download_url.unwrap_or_default();
+    let mut download = file
+        .download_url
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_default();
+    download = force_https(&download);
     if download.is_empty() {
-        let lookup: CfDownload = http
-            .get_json(
+        if let Ok(lookup) = http
+            .get_json::<CfDownload>(
                 &format!(
                     "{CURSEFORGE_API}/mods/{project_id}/files/{}/download-url",
                     file.id
                 ),
                 &curseforge_headers(api_key),
             )
-            .await?;
-        download = lookup.data;
+            .await
+        {
+            download = force_https(lookup.data.trim());
+        }
+    }
+    if download.is_empty() {
+        download = curseforge_cdn_url(file.id, &file.file_name);
     }
     let sha1 = file
         .hashes
@@ -1059,15 +1276,14 @@ pub async fn install_from_version(
     game_version: &str,
     loader: &str,
 ) -> Result<Vec<String>, LauncherError> {
-    if version_id.chars().all(|ch| ch.is_ascii_digit()) {
+    if is_curseforge_id(version_id) {
         let api_key = paths.read_curseforge_key();
         let instance = cache.get_instance(instance_id).await?;
         if let Some(record) = instance {
             let files = list_installed(paths, instance_id).unwrap_or_default();
             if let Some(item) = files.iter().find(|file| {
                 file.version_id.as_deref() == Some(version_id)
-                    || (file.source.contains("curse")
-                        && file.project_id.chars().all(|ch| ch.is_ascii_digit()))
+                    || (file.source.contains("curse") && is_curseforge_id(&file.project_id))
             }) {
                 return install_curseforge(
                     http,
@@ -1111,8 +1327,8 @@ pub(crate) async fn install_curseforge_flexible(
     project_type: &str,
     api_key: &str,
 ) -> Result<Vec<String>, LauncherError> {
-    let id = if project_id.chars().all(|ch| ch.is_ascii_digit()) {
-        project_id.to_string()
+    let id = if is_curseforge_id(project_id) {
+        curseforge_numeric_id(project_id).to_string()
     } else {
         lookup_curseforge_id(http, project_id, api_key).await?
     };
@@ -1145,7 +1361,8 @@ pub async fn catalog_project(
     api_key: &str,
 ) -> Result<serde_json::Value, LauncherError> {
     let wanted = id.trim();
-    if wanted.chars().all(|ch| ch.is_ascii_digit()) {
+    if is_curseforge_id(wanted) {
+        let wanted = curseforge_numeric_id(wanted);
         let url = format!("{CURSEFORGE_API}/mods/{wanted}");
         let value: serde_json::Value = http.get_json(&url, &curseforge_headers(api_key)).await?;
         let data = value.get("data").cloned().unwrap_or(value);
@@ -1170,9 +1387,13 @@ pub async fn catalog_project(
             .pointer("/thumbsUpCount")
             .and_then(|item| item.as_u64())
             .unwrap_or(0);
+        let slug = data
+            .pointer("/slug")
+            .and_then(|item| item.as_str())
+            .unwrap_or(wanted);
         return Ok(serde_json::json!({
-            "id": wanted,
-            "slug": wanted,
+            "id": format!("{CURSEFORGE_ID_PREFIX}{wanted}"),
+            "slug": slug,
             "title": title,
             "description": summary,
             "icon_url": icon,
@@ -1210,7 +1431,8 @@ pub async fn catalog_versions(
     loader: &str,
     api_key: &str,
 ) -> Result<Vec<serde_json::Value>, LauncherError> {
-    if source.contains("curse") || id.chars().all(|ch| ch.is_ascii_digit()) {
+    if source.contains("curse") || is_curseforge_id(id) {
+        let id = curseforge_numeric_id(id);
         let mut url = format!("{CURSEFORGE_API}/mods/{id}/files?pageSize=50");
         if !game_version.is_empty() {
             url.push_str("&gameVersion=");
@@ -1310,10 +1532,11 @@ pub async fn content_updates(
             .version_number
             .clone()
             .unwrap_or_else(|| pretty_version_label(&file.file_name));
-        let latest = if file.source.contains("curse")
-            || file.project_id.chars().all(|ch| ch.is_ascii_digit())
-        {
-            let mut url = format!("{CURSEFORGE_API}/mods/{}/files?pageSize=5", file.project_id);
+        let latest = if file.source.contains("curse") || is_curseforge_id(&file.project_id) {
+            let mut url = format!(
+                "{CURSEFORGE_API}/mods/{}/files?pageSize=5",
+                curseforge_numeric_id(&file.project_id)
+            );
             if !game_version.is_empty() {
                 url.push_str("&gameVersion=");
                 url.push_str(&urlencoding::encode(game_version));
@@ -1418,7 +1641,7 @@ pub async fn list_missing_dependencies(
         let Some(version_id) = file.version_id.as_deref().filter(|value| !value.is_empty()) else {
             continue;
         };
-        if file.source.contains("curse") || file.project_id.chars().all(|ch| ch.is_ascii_digit()) {
+        if file.source.contains("curse") || is_curseforge_id(&file.project_id) {
             continue;
         }
         let Ok(remote) = api.fetch_version(version_id).await else {
@@ -1654,6 +1877,42 @@ struct GhAsset {
     name: String,
     #[serde(default)]
     browser_download_url: String,
+}
+
+fn pick_curseforge_file(files: Vec<CfFile>, game_version: &str, loader: &str) -> Option<CfFile> {
+    let game = game_version.trim();
+    let loader = loader.trim().to_ascii_lowercase();
+    files
+        .into_iter()
+        .filter(|item| !item.file_name.trim().is_empty())
+        .max_by_key(|item| {
+            let mut score = 0u8;
+            if !game.is_empty()
+                && item
+                    .game_versions
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case(game))
+            {
+                score += 2;
+            }
+            if !loader.is_empty()
+                && loader != "vanilla"
+                && item.game_versions.iter().any(|value| {
+                    let lower = value.to_ascii_lowercase();
+                    lower == loader || lower.contains(&loader)
+                })
+            {
+                score += 2;
+            }
+            if item
+                .download_url
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+            {
+                score += 1;
+            }
+            score
+        })
 }
 
 #[derive(Debug, Deserialize)]

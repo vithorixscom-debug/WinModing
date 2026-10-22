@@ -46,11 +46,23 @@
         {{ updatedLabel }}
       </div>
     </div>
-    <div v-if="project.author" class="install">
+    <div class="install">
       <Button color="primary" :disabled="installed || installing" @click.stop="install()">
         <DownloadIcon v-if="!installed" />
         <CheckIcon v-else />
-        {{ installing ? 'Installing' : installed ? 'Installed' : 'Install' }}
+        {{
+          installing
+            ? instance
+              ? 'Installing'
+              : 'Saving'
+            : installed
+              ? instance
+                ? 'Installed'
+                : 'Saved'
+              : instance
+                ? 'Install'
+                : 'Download'
+        }}
       </Button>
     </div>
   </Card>
@@ -119,12 +131,15 @@ const updatedLabel = computed(() => {
 
 async function openProject() {
   emits('open')
-  if (isCurseForge.value || sourceName.value === 'GitHub') {
+  if (sourceName.value === 'GitHub') {
     return
   }
   router.push({
     path: `/project/${props.project.project_id ?? props.project.id}/`,
-    query: { i: props.instance ? props.instance.path : undefined },
+    query: {
+      i: props.instance ? props.instance.path : undefined,
+      source: props.project.source || undefined,
+    },
   })
 }
 
@@ -134,7 +149,7 @@ async function install() {
     props.project.project_id,
     null,
     props.instance ? props.instance.path : null,
-    'SearchCard',
+    props.project.source || (isCurseForge.value ? 'curseforge' : 'modrinth'),
     (version) => {
       installing.value = false
 

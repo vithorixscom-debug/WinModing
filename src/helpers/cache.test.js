@@ -9,6 +9,7 @@ describe("isModrinthProjectId", () => {
 
   it("rejects curseforge, github, paths, and numeric ids", () => {
     expect(isModrinthProjectId("12345")).toBe(false);
+    expect(isModrinthProjectId("cf-238222")).toBe(false);
     expect(isModrinthProjectId("curseforge:123")).toBe(false);
     expect(isModrinthProjectId("github:owner/repo")).toBe(false);
     expect(isModrinthProjectId("folder/mod.jar")).toBe(false);

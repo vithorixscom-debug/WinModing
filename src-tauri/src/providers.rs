@@ -1,4 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Duration;
+
+use tokio::sync::mpsc;
+use tokio::time::timeout;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -11,8 +15,9 @@ use crate::domain::{
 use crate::error::LauncherError;
 use crate::net::HttpPool;
 use crate::protocol::{
-    curseforge_class_id, curseforge_headers, curseforge_loader_type, parse_github_repo,
-    CURSEFORGE_API, CURSEFORGE_MINECRAFT_GAME_ID, MODRINTH_API,
+    curseforge_class_id, curseforge_headers, curseforge_loader_type, normalize_mod_loader,
+    parse_github_repo, CURSEFORGE_API, CURSEFORGE_ID_PREFIX, CURSEFORGE_MINECRAFT_GAME_ID,
+    MODRINTH_API,
 };
 
 const KNOWN_LOADERS: &[&str] = &["fabric", "forge", "neoforge", "quilt"];
@@ -23,11 +28,13 @@ pub trait ModProvider: Send + Sync {
     async fn search(&self, query: &CatalogQuery) -> Result<(Vec<UnifiedMod>, u64), LauncherError>;
 }
 
+#[derive(Clone)]
 pub struct ModrinthProvider {
     http: HttpPool,
     cache: MetadataCache,
 }
 
+#[derive(Clone)]
 pub struct CurseForgeProvider {
     http: HttpPool,
     cache: MetadataCache,
@@ -157,6 +164,7 @@ pub async fn search_unified(
     if let Some((_, repo)) = parse_github_repo(&original_text) {
         query.text = repo;
     }
+    query.loader = query.loader.as_deref().and_then(normalize_mod_loader);
     let source = query
         .source
         .as_deref()
@@ -168,21 +176,14 @@ pub async fn search_unified(
     let modrinth = ModrinthProvider::new(http.clone(), cache.clone());
     let curseforge =
         CurseForgeProvider::new(http.clone(), cache.clone(), curseforge_key.to_string());
-    let left_fut = async {
-        if want_modrinth {
-            modrinth.search(&query).await
-        } else {
-            Ok((Vec::new(), 0))
-        }
-    };
-    let right_fut = async {
-        if want_curseforge {
-            curseforge.search(&query).await
-        } else {
-            Ok((Vec::new(), 0))
-        }
-    };
-    let (left, right) = tokio::join!(left_fut, right_fut);
+    let (left, right) = join_catalog_providers(
+        want_modrinth,
+        want_curseforge,
+        &modrinth,
+        &curseforge,
+        &query,
+    )
+    .await;
     let mut warnings = Vec::new();
     let mut mr_items = Vec::new();
     let mut cf_items = Vec::new();
@@ -227,7 +228,7 @@ pub async fn search_unified(
     if show_both {
         items = annotate_page(items);
         if pref != "both" && pref != "all" {
-            items = filter_duplicate_cards(&modrinth, &curseforge, &query, items, &pref).await;
+            items = keep_preferred_source(items, &pref);
         }
     }
     if let Some((owner, repo)) = parse_github_repo(&original_text) {
@@ -258,17 +259,119 @@ pub async fn search_unified(
         }
     }
     if items.is_empty() && !warnings.is_empty() {
-        return Err(LauncherError::Provider {
-            provider: "catalog".into(),
-            status: 0,
-            body: warnings.join(" | "),
-        });
+        return Err(LauncherError::Message(warnings.join(" | ")));
     }
     Ok(CatalogPage {
         total_hits: total_hits.max(items.len() as u64),
         items,
         warnings,
     })
+}
+
+enum CatalogSide {
+    Modrinth(Result<(Vec<UnifiedMod>, u64), LauncherError>),
+    CurseForge(Result<(Vec<UnifiedMod>, u64), LauncherError>),
+}
+
+async fn join_catalog_providers(
+    want_modrinth: bool,
+    want_curseforge: bool,
+    modrinth: &ModrinthProvider,
+    curseforge: &CurseForgeProvider,
+    query: &CatalogQuery,
+) -> (
+    Result<(Vec<UnifiedMod>, u64), LauncherError>,
+    Result<(Vec<UnifiedMod>, u64), LauncherError>,
+) {
+    if !want_modrinth && !want_curseforge {
+        return (Ok((Vec::new(), 0)), Ok((Vec::new(), 0)));
+    }
+    let (tx, mut rx) = mpsc::channel::<CatalogSide>(2);
+    if want_modrinth {
+        let tx = tx.clone();
+        let provider = modrinth.clone();
+        let query = query.clone();
+        tokio::spawn(async move {
+            let _ = tx
+                .send(CatalogSide::Modrinth(search_relaxing(&provider, &query).await))
+                .await;
+        });
+    }
+    if want_curseforge {
+        let tx = tx.clone();
+        let provider = curseforge.clone();
+        let query = query.clone();
+        tokio::spawn(async move {
+            let _ = tx
+                .send(CatalogSide::CurseForge(
+                    search_relaxing(&provider, &query).await,
+                ))
+                .await;
+        });
+    }
+    drop(tx);
+
+    let mut left = if want_modrinth {
+        None
+    } else {
+        Some(Ok((Vec::new(), 0)))
+    };
+    let mut right = if want_curseforge {
+        None
+    } else {
+        Some(Ok((Vec::new(), 0)))
+    };
+    let started = tokio::time::Instant::now();
+    while left.is_none() || right.is_none() {
+        let had_one = left.is_some() || right.is_some();
+        let wait = if had_one {
+            Duration::from_millis(1500)
+        } else {
+            Duration::from_secs(6).saturating_sub(started.elapsed())
+        };
+        if wait.is_zero() {
+            break;
+        }
+        match timeout(wait, rx.recv()).await {
+            Ok(Some(CatalogSide::Modrinth(result))) => left = Some(result),
+            Ok(Some(CatalogSide::CurseForge(result))) => right = Some(result),
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    (
+        left.unwrap_or_else(|| Err(LauncherError::Message("Modrinth timed out".into()))),
+        right.unwrap_or_else(|| Err(LauncherError::Message("CurseForge timed out".into()))),
+    )
+}
+
+async fn search_relaxing(
+    provider: &impl ModProvider,
+    query: &CatalogQuery,
+) -> Result<(Vec<UnifiedMod>, u64), LauncherError> {
+    let first = provider.search(query).await;
+    let filtered = query
+        .game_version
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || query
+            .loader
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+    match first {
+        Ok((rows, total)) if !rows.is_empty() || !filtered => Ok((rows, total)),
+        Ok((empty_rows, empty_total)) => {
+            let mut relaxed = query.clone();
+            relaxed.game_version = None;
+            relaxed.loader = None;
+            match provider.search(&relaxed).await {
+                Ok((rows, total)) if !rows.is_empty() => Ok((rows, total)),
+                Ok(_) => Ok((empty_rows, empty_total)),
+                Err(_) => Ok((empty_rows, empty_total)),
+            }
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn annotate_page(mut items: Vec<UnifiedMod>) -> Vec<UnifiedMod> {
@@ -291,117 +394,12 @@ fn annotate_page(mut items: Vec<UnifiedMod>) -> Vec<UnifiedMod> {
     items
 }
 
-async fn filter_duplicate_cards(
-    modrinth: &ModrinthProvider,
-    curseforge: &CurseForgeProvider,
-    query: &CatalogQuery,
-    items: Vec<UnifiedMod>,
-    pref: &str,
-) -> Vec<UnifiedMod> {
-    let prefer_cf = matches!(pref, "curseforge" | "curse");
-    let mut kept = Vec::with_capacity(items.len());
-    for item in items {
-        let drop = if prefer_cf && item.source == ProviderSource::Modrinth {
-            listed_on_curseforge(curseforge, query, &item).await
-        } else if !prefer_cf && item.source == ProviderSource::CurseForge {
-            listed_on_modrinth(modrinth, query, &item).await
-        } else {
-            false
-        };
-        if !drop {
-            kept.push(item);
-        }
-    }
-    kept
-}
-
-async fn listed_on_modrinth(
-    modrinth: &ModrinthProvider,
-    query: &CatalogQuery,
-    item: &UnifiedMod,
-) -> bool {
-    let slug = item.slug.trim();
-    if !slug.is_empty() {
-        let url = format!("{MODRINTH_API}/project/{}", urlencoding::encode(slug));
-        if modrinth
-            .http
-            .cached_text(
-                &modrinth.cache,
-                &format!("modrinth-exists:{slug}"),
-                &url,
-                &[],
-            )
-            .await
-            .is_ok()
-        {
-            return true;
-        }
-    }
-    let mut probe = query.clone();
-    probe.text = item.name.clone();
-    probe.limit = 5;
-    probe.offset = 0;
-    match modrinth.search(&probe).await {
-        Ok((rows, _)) => rows.iter().any(|row| {
-            row.slug.eq_ignore_ascii_case(slug)
-                || normalize_title(&row.name) == normalize_title(&item.name)
-        }),
-        Err(_) => false,
-    }
-}
-
-async fn listed_on_curseforge(
-    curseforge: &CurseForgeProvider,
-    query: &CatalogQuery,
-    item: &UnifiedMod,
-) -> bool {
-    let slug = item.slug.trim();
-    let auth = curseforge_headers(&curseforge.api_key);
-    if !slug.is_empty() {
-        let url = format!(
-            "{CURSEFORGE_API}/mods/search?gameId={CURSEFORGE_MINECRAFT_GAME_ID}&slug={}&pageSize=5",
-            urlencoding::encode(slug)
-        );
-        if let Ok(body) = curseforge
-            .http
-            .cached_text(
-                &curseforge.cache,
-                &format!("curseforge-exists:{slug}"),
-                &url,
-                &auth,
-            )
-            .await
-        {
-            if let Ok(parsed) = serde_json::from_str::<CfSearch>(&body) {
-                if parsed
-                    .data
-                    .iter()
-                    .any(|hit| hit.slug.eq_ignore_ascii_case(slug))
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    let mut probe = query.clone();
-    probe.text = item.name.clone();
-    probe.limit = 5;
-    probe.offset = 0;
-    match curseforge.search(&probe).await {
-        Ok((rows, _)) => rows.iter().any(|row| {
-            row.slug.eq_ignore_ascii_case(slug)
-                || normalize_title(&row.name) == normalize_title(&item.name)
-        }),
-        Err(_) => false,
-    }
-}
-
 fn cf_mod_to_unified(hit: CfMod) -> UnifiedMod {
     let author = hit.authors.first().map(|author| author.name.clone());
     let icon = hit.logo.and_then(|logo| logo.thumbnail_url.or(logo.url));
     let (versions, loaders) = versions_and_loaders(&hit.latest_files_indexes);
     UnifiedMod {
-        id: hit.id.to_string(),
+        id: format!("{CURSEFORGE_ID_PREFIX}{}", hit.id),
         source: ProviderSource::CurseForge,
         slug: hit.slug,
         name: hit.name,
@@ -414,53 +412,69 @@ fn cf_mod_to_unified(hit: CfMod) -> UnifiedMod {
         icon_url: icon,
         supported_loaders: loaders,
         supported_game_versions: versions,
-        author,
+        author: author.or_else(|| Some("CurseForge".into())),
         also_listed_on: None,
     }
 }
 
 async fn concat_catalog_page(
-    modrinth: &ModrinthProvider,
-    curseforge: &CurseForgeProvider,
+    _modrinth: &ModrinthProvider,
+    _curseforge: &CurseForgeProvider,
     query: &CatalogQuery,
     mr_items: Vec<UnifiedMod>,
     mr_total: u64,
     cf_items: Vec<UnifiedMod>,
     cf_total: u64,
-    warnings: &mut Vec<String>,
+    _warnings: &mut Vec<String>,
 ) -> (Vec<UnifiedMod>, u64) {
-    let limit = query.limit.max(1);
-    let offset = query.offset as u64;
-    let total = mr_total + cf_total;
-    if mr_total == 0 {
-        return (cf_items, total.max(cf_total));
+    let limit = query.limit.max(1) as usize;
+    let total = mr_total.saturating_add(cf_total);
+    (
+        interleave_catalog(mr_items, cf_items, limit),
+        total.max(mr_total).max(cf_total),
+    )
+}
+
+fn interleave_catalog(
+    mr_items: Vec<UnifiedMod>,
+    cf_items: Vec<UnifiedMod>,
+    limit: usize,
+) -> Vec<UnifiedMod> {
+    let mut out = Vec::with_capacity(limit.min(mr_items.len() + cf_items.len()));
+    let mut left = mr_items.into_iter();
+    let mut right = cf_items.into_iter();
+    while out.len() < limit {
+        let mut progressed = false;
+        if let Some(item) = left.next() {
+            out.push(item);
+            progressed = true;
+        }
+        if out.len() >= limit {
+            break;
+        }
+        if let Some(item) = right.next() {
+            out.push(item);
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
     }
-    if offset >= mr_total {
-        let mut cf_query = query.clone();
-        cf_query.offset = (offset - mr_total) as u32;
-        cf_query.limit = limit;
-        return match curseforge.search(&cf_query).await {
-            Ok((rows, _)) => (rows, total),
-            Err(err) => {
-                warnings.push(format!("CurseForge: {err}"));
-                (Vec::new(), total)
+    out
+}
+
+fn keep_preferred_source(items: Vec<UnifiedMod>, pref: &str) -> Vec<UnifiedMod> {
+    let want_cf = matches!(pref, "curseforge" | "curse");
+    items
+        .into_iter()
+        .filter(|item| {
+            if want_cf {
+                item.source == ProviderSource::CurseForge || item.also_listed_on.is_none()
+            } else {
+                item.source == ProviderSource::Modrinth || item.also_listed_on.is_none()
             }
-        };
-    }
-    let mut items = mr_items;
-    if (items.len() as u32) >= limit {
-        return (items, total);
-    }
-    let remaining = limit.saturating_sub(items.len() as u32);
-    let mut cf_query = query.clone();
-    cf_query.offset = 0;
-    cf_query.limit = remaining;
-    match curseforge.search(&cf_query).await {
-        Ok((rows, _)) => items.extend(rows),
-        Err(err) => warnings.push(format!("CurseForge: {err}")),
-    }
-    let _ = modrinth;
-    (items, total)
+        })
+        .collect()
 }
 
 pub fn modrinth_search_url(query: &CatalogQuery) -> Result<String, LauncherError> {
@@ -524,11 +538,19 @@ pub fn curseforge_search_url(query: &CatalogQuery) -> String {
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        parts.push(format!("gameVersion={}", urlencoding::encode(game)));
+        let encoded = serde_json::to_string(&[game]).unwrap_or_else(|_| format!("[\"{game}\"]"));
+        parts.push(format!(
+            "gameVersions={}",
+            urlencoding::encode(&encoded)
+        ));
     }
-    if let Some(loader) = query.loader.as_deref() {
-        if let Some(kind) = curseforge_loader_type(loader) {
-            parts.push(format!("modLoaderType={kind}"));
+    if class_id == 6 || class_id == 4471 {
+        if let Some(kind) = query.loader.as_deref().and_then(curseforge_loader_type) {
+            let encoded = serde_json::to_string(&[kind]).unwrap_or_else(|_| format!("[{kind}]"));
+            parts.push(format!(
+                "modLoaderTypes={}",
+                urlencoding::encode(&encoded)
+            ));
         }
     }
     format!("{CURSEFORGE_API}/mods/search?{}", parts.join("&"))
@@ -537,8 +559,8 @@ pub fn curseforge_search_url(query: &CatalogQuery) -> String {
 fn curseforge_sort_field(index: Option<&str>) -> u8 {
     match index.unwrap_or("relevance") {
         "updated" => 3,
-        "newest" => 12,
-        "follows" => 2,
+        "newest" => 11,
+        "follows" => 12,
         "downloads" => 6,
         _ => 2,
     }
@@ -991,5 +1013,27 @@ mod tests {
         assert!(url.starts_with("https://api.modrinth.com/v2/search?"));
         assert!(url.contains("categories"));
         assert!(url.contains("fabric"));
+    }
+
+    #[test]
+    fn curseforge_url_uses_json_filters() {
+        let query = CatalogQuery {
+            text: "jei".to_string(),
+            game_version: Some("1.21.1".into()),
+            loader: Some("fabric".into()),
+            project_type: "mod".into(),
+            limit: 20,
+            offset: 0,
+            show_both: false,
+            source: None,
+            duplicate_pref: None,
+            index: Some("newest".into()),
+        };
+        let url = curseforge_search_url(&query);
+        assert!(url.contains("gameVersions="));
+        assert!(url.contains("modLoaderTypes="));
+        assert!(!url.contains("&gameVersion="));
+        assert!(!url.contains("&modLoaderType="));
+        assert!(url.contains("sortField=11"));
     }
 }

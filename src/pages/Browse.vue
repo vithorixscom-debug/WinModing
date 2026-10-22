@@ -20,7 +20,8 @@ import { useRoute, useRouter } from 'vue-router'
 import SearchCard from '@/components/ui/SearchCard.vue'
 import { get as getInstance, get_projects as getInstanceProjects } from '@/helpers/profile.js'
 import { instanceIconSrc } from '@/helpers/instanceIcon.js'
-import { get_catalog_results, catalogItemToHit, catalogQueryText } from '@/helpers/cache.js'
+import { get_catalog_results, catalogItemToHit, catalogQueryText, catalogIdKey } from '@/helpers/cache.js'
+import { invoke } from '@tauri-apps/api/core'
 import { debounce } from '@/helpers/utils.js'
 import { get as getSettings, set as setSettings } from '@/helpers/settings.js'
 import { useI18n } from '@/helpers/i18n.js'
@@ -159,7 +160,7 @@ async function refreshSearch() {
   }
   if (instanceContext.value) {
     if (!ignoreInstanceLoaders.value && projectType.value === 'mod') {
-      orFacets.value = [`categories:${encodeURIComponent(instanceContext.value.loader)}`]
+      orFacets.value = [`categories:${String(instanceContext.value.loader || '').toLowerCase()}`]
     }
     if (!ignoreInstanceGameVersions.value) {
       selectedVersions.value = [instanceContext.value.game_version]
@@ -285,11 +286,17 @@ async function refreshSearch() {
   if (instanceContext.value) {
     for (const val of rawResults.result.hits) {
       val.installed = Object.values(instanceProjects.value || {}).some((x) => {
-        const stored = String(x?.metadata?.project_id ?? '').toLowerCase()
-        const id = String(val.project_id ?? '').toLowerCase()
-        const slug = String(val.slug ?? '').toLowerCase()
+        const stored = catalogIdKey(x?.metadata?.project_id)
+        const id = catalogIdKey(val.project_id)
+        const slug = catalogIdKey(val.slug)
         return stored && (stored === id || stored === slug || stored.endsWith(`:${id}`) || stored.endsWith(`:${slug}`))
       })
+    }
+  } else {
+    const saved = (await invoke('list_saved_catalog').catch(() => [])) || []
+    const keys = new Set(saved.map((id) => catalogIdKey(id)))
+    for (const val of rawResults.result.hits) {
+      val.installed = keys.has(catalogIdKey(val.project_id)) || keys.has(catalogIdKey(val.slug))
     }
   }
   results.value = rawResults.result
@@ -344,7 +351,7 @@ function headerLabel(raw) {
   return key ? i18n.value(key) : formatCategoryHeader(raw)
 }
 
-const debouncedSearchChange = debounce(() => onSearchChange(1), 200)
+const debouncedSearchChange = debounce(() => onSearchChange(1), 400)
 
 const searchWrapper = ref(null)
 async function onSearchChangeToTop(newPageNumber) {
@@ -565,9 +572,14 @@ const [categories, loaders, availableGameVersions] = await Promise.all([
     .then((s) => sortByNameOrNumber(Array.isArray(s) ? s : [], ['header', 'name']))
     .then(ref),
   get_loaders().catch(handleError).then(ref),
-  get_game_versions().catch(handleError).then(ref),
+  Promise.resolve(ref([])),
   refreshSearch(),
 ])
+void get_game_versions()
+  .catch(() => [])
+  .then((versions) => {
+    availableGameVersions.value = versions
+  })
 
 const filteredLoaders = computed(() => {
   return loaders.value.filter((loader) => {

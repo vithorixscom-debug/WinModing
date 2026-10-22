@@ -1,11 +1,4 @@
-import { ofetch } from "ofetch";
 import { invoke } from "@tauri-apps/api/core";
-
-const API = "https://api.modrinth.com/v2";
-
-async function getJson(url) {
-  return ofetch(url);
-}
 
 export function wrapSearch(data) {
   const result = data?.result
@@ -20,54 +13,59 @@ export function wrapSearch(data) {
 }
 
 export async function get_project(id) {
-  return getJson(`${API}/project/${encodeURIComponent(id)}`);
+  const value = String(id ?? "").trim();
+  if (!value) return null;
+  return invoke("get_catalog_project", { id: value });
 }
 
 export function isModrinthProjectId(id) {
   if (typeof id !== "string") return false;
   const value = id.trim();
   if (!value || value === "null") return false;
-  if (/^\d+$/.test(value)) return false;
+  if (/^\d+$/.test(value) || value.toLowerCase().startsWith("cf-")) return false;
   if (value.startsWith("github:") || value.startsWith("curseforge:")) return false;
   if (value.includes("/") || value.endsWith(".jar")) return false;
   return true;
 }
 
 export async function get_project_many(ids = []) {
-  const clean = (ids ?? []).filter(isModrinthProjectId);
+  const clean = (ids ?? []).filter((id) => String(id ?? "").trim() && String(id) !== "null");
   if (!clean.length) return [];
-  return getJson(`${API}/projects?ids=${encodeURIComponent(JSON.stringify(clean))}`);
+  return Promise.all(clean.map((id) => invoke("get_catalog_project", { id: String(id) }).catch(() => null))).then(
+    (rows) => rows.filter(Boolean),
+  );
 }
 
 export async function get_version(id) {
-  return getJson(`${API}/version/${encodeURIComponent(id)}`);
+  return invoke("get_catalog_version", { id: String(id ?? "").trim() });
 }
 
 export async function get_version_many(ids = []) {
   const clean = (ids ?? []).filter((id) => typeof id === "string" && id.trim() && id !== "null");
   if (!clean.length) return [];
-  return getJson(`${API}/versions?ids=${encodeURIComponent(JSON.stringify(clean))}`);
+  return Promise.all(clean.map((id) => invoke("get_catalog_version", { id }).catch(() => null))).then((rows) =>
+    rows.filter(Boolean),
+  );
 }
 
-export async function get_user(id) {
-  return getJson(`${API}/user/${encodeURIComponent(id)}`);
+export async function get_user() {
+  return null;
 }
 
-export async function get_user_many(ids = []) {
-  if (!ids.length) return [];
-  return getJson(`${API}/users?ids=${encodeURIComponent(JSON.stringify(ids))}`);
+export async function get_user_many() {
+  return [];
 }
 
-export async function get_team(id) {
-  return getJson(`${API}/team/${encodeURIComponent(id)}/members`);
+export async function get_team() {
+  return [];
 }
 
 export async function get_team_many() {
   return [];
 }
 
-export async function get_organization(id) {
-  return getJson(`${API}/organization/${encodeURIComponent(id)}`);
+export async function get_organization() {
+  return null;
 }
 
 export async function get_organization_many() {
@@ -80,10 +78,21 @@ export async function get_search_results(id) {
   if (!url) {
     return wrapSearch({ hits: [], offset: 0, limit: 20, total_hits: 0 });
   }
-  const data = url.startsWith("http")
-    ? await getJson(url)
-    : await getJson(`${API}/search?${url.replace(/^\?/, "")}`);
-  return wrapSearch(data);
+  const params = new URLSearchParams(url.startsWith("http") ? url.split("?")[1] || "" : url.replace(/^\?/, ""));
+  const catalog = await get_catalog_results({
+    text: params.get("query") || "",
+    limit: Number(params.get("limit")) || 20,
+    offset: Number(params.get("offset")) || 0,
+    index: params.get("index") || "relevance",
+    showBoth: true,
+    source: "both",
+  });
+  return wrapSearch({
+    hits: (catalog.items ?? []).map((item) => catalogItemToHit(item)),
+    offset: Number(params.get("offset")) || 0,
+    limit: Number(params.get("limit")) || 20,
+    total_hits: Number(catalog.totalHits ?? catalog.total_hits ?? 0),
+  });
 }
 
 export async function get_search_results_many(ids = []) {
@@ -102,6 +111,13 @@ export function catalogQueryText(value) {
   const github = text.match(/github\.com\/([^/\s]+)\/([^/\s?#]+)/i);
   if (github) return github[2].replace(/\.git$/i, "");
   return text;
+}
+
+export function catalogIdKey(id) {
+  return String(id ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^cf-/, "");
 }
 
 export function catalogItemToHit(item, projectType = "mod") {

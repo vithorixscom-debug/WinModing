@@ -63,6 +63,11 @@ impl AppPaths {
             &self.versions,
             &self.assets.join("indexes"),
             &self.assets.join("objects"),
+            &self.downloads_dir(),
+            &self.downloads_dir().join("mods"),
+            &self.downloads_dir().join("resourcepacks"),
+            &self.downloads_dir().join("shaderpacks"),
+            &self.downloads_dir().join("datapacks"),
         ] {
             fs::create_dir_all(dir).map_err(|err| io_at(dir, err))?;
         }
@@ -71,6 +76,10 @@ impl AppPaths {
 
     pub fn instance_dir(&self, id: &str) -> PathBuf {
         self.instances.join(id)
+    }
+
+    pub fn downloads_dir(&self) -> PathBuf {
+        self.root.join("downloads")
     }
 
     pub fn version_json(&self, version_id: &str) -> PathBuf {

@@ -30,7 +30,17 @@ defineExpose({
         x.title === notification.title &&
         x.type === notification.type,
     )
-    if (existingNotif) {
+    if (notification.type === 'error') {
+      for (const old of notifications.value.filter(
+        (item) => item.type === 'error' && item.title === notification.title,
+      )) {
+        stopTimer(old)
+        const idx = notifications.value.indexOf(old)
+        if (idx !== -1) notifications.value.splice(idx, 1)
+      }
+    }
+
+    if (existingNotif && notification.type !== 'error') {
       setNotificationTimer(existingNotif)
 
       return
@@ -43,6 +53,8 @@ defineExpose({
   },
 })
 
+const AUTO_DISMISS_MS = 20000
+
 function setNotificationTimer(notification) {
   if (!notification) return
 
@@ -52,7 +64,7 @@ function setNotificationTimer(notification) {
 
   notification.timer = setTimeout(() => {
     notifications.value.splice(notifications.value.indexOf(notification), 1)
-  }, 30000)
+  }, AUTO_DISMISS_MS)
 }
 
 function stopTimer(notif) {
@@ -128,7 +140,7 @@ function stopTimer(notif) {
 .notifs-enter-active,
 .notifs-leave-active,
 .notifs-move {
-  transition: all 0.5s;
+  transition: all 0.33s;
 
   @media (prefers-reduced-motion) {
     transition: none !important;

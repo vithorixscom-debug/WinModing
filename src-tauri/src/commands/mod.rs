@@ -25,9 +25,14 @@ pub use accounts::{
     remove_account,
 };
 pub use catalog::{
-    __cmd__get_catalog_project, __cmd__list_project_versions, __cmd__search_catalog,
-    __tauri_command_name_get_catalog_project, __tauri_command_name_list_project_versions,
-    __tauri_command_name_search_catalog, get_catalog_project, list_project_versions,
+    __cmd__catalog_get_json, __cmd__get_catalog_project, __cmd__get_catalog_version,
+    __cmd__list_project_versions, __cmd__list_saved_catalog, __cmd__open_downloads_folder,
+    __cmd__save_catalog_download, __cmd__search_catalog, __tauri_command_name_catalog_get_json,
+    __tauri_command_name_get_catalog_project, __tauri_command_name_get_catalog_version,
+    __tauri_command_name_list_project_versions, __tauri_command_name_list_saved_catalog,
+    __tauri_command_name_open_downloads_folder, __tauri_command_name_save_catalog_download,
+    __tauri_command_name_search_catalog, catalog_get_json, get_catalog_project, get_catalog_version,
+    list_project_versions, list_saved_catalog, open_downloads_folder, save_catalog_download,
     search_catalog,
 };
 pub use settings::{

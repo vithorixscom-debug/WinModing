@@ -22,3 +22,5 @@ ref/
 .cursor/
 .idea/
 *.pdb
+.tmp-milda/
+.tmp-noctrinth/

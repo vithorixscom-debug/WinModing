@@ -2,7 +2,7 @@
 
 **A Modrinth-based Minecraft launcher with CurseForge.**
 
-WinModing is a Windows desktop fork of the Modrinth App UI (Theseus / AstralRinth), with Modrinth and CurseForge in one catalog. No API keys to paste. Microsoft login uses the public Minecraft client.
+WinModing is a Windows desktop fork of the Modrinth App UI (Theseus / AstralRinth), with Modrinth and CurseForge in one catalog. You never paste API keys. Microsoft login uses the public Minecraft client.
 
 <p align="center">
   <img src="src-tauri/icons/icon-256.png" alt="WinModing" width="128" height="128">
@@ -13,8 +13,10 @@ WinModing is a Windows desktop fork of the Modrinth App UI (Theseus / AstralRint
 ## What you get
 
 - **Modrinth + CurseForge** in the same Browse tab (or one site at a time)
+- No CurseForge / Modrinth API key to paste — public catalog relays are used when needed
 - Isolated profiles: mods, saves, and config stay per instance
-- Fabric, Quilt, Forge, and NeoForge (Fabric/Quilt install is wired today)
+- From Browse (not inside a profile), **Download** saves jars into the launcher folder, not into a Minecraft instance
+- Fabric, Quilt, Forge, and NeoForge
 - Microsoft, Ely.by, and offline accounts — no Azure app setup
 - Discord shows **Playing Minecraft** only while the game is running
 - Playtime on the profile, in hours
@@ -27,6 +29,10 @@ WinModing is a Windows desktop fork of the Modrinth App UI (Theseus / AstralRint
 - [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
 
 To build from source: Rust 1.77+ and Node.js 20+.
+
+## Install
+
+Download **WinModing.exe** from [Releases](https://github.com/vithorixscom-debug/WinModing/releases). Put a shortcut wherever you like; user data stays under `%LOCALAPPDATA%\WinModing`.
 
 ## Build
 
@@ -52,6 +58,7 @@ The release binary is `WinModing.exe`. Bundled installers: `npm run tauri build`
 | --- | --- |
 | `%LOCALAPPDATA%\WinModing` | Instances, Java runtimes, metadata, database |
 | `%LOCALAPPDATA%\WinModing\instances\<id>` | One Minecraft profile |
+| `%LOCALAPPDATA%\WinModing\downloads` | Jars saved from Browse without installing into a profile |
 
 ## Disclaimer
 
