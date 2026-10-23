@@ -1,6 +1,6 @@
 [package]
 name = "winmoding"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.77"
 description = "WinModing — Modrinth-based Minecraft launcher with CurseForge"
@@ -24,6 +24,7 @@ base64 = "0.22"
 dirs = "6"
 futures-util = "0.3"
 hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
 log = "0.4"
 md-5 = "0.10"
 rand = "0.8"

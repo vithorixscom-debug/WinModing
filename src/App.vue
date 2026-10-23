@@ -11,6 +11,8 @@ import {
   MinimizeIcon,
   MaximizeIcon,
   RestoreIcon,
+  UserIcon,
+  ServerIcon,
 } from '@modrinth/assets'
 import { Button, Notifications } from '@modrinth/ui'
 import { useLoading, useTheming } from '@/store/state'
@@ -25,7 +27,6 @@ import ModrinthLoadingIndicator from '@/components/modrinth-loading-indicator'
 import { handleError, useNotifications } from '@/store/notifications.js'
 import { command_listener, warning_listener, process_listener } from '@/helpers/events.js'
 import QuickInstanceSwitcher from '@/components/ui/QuickInstanceSwitcher.vue'
-import SlideRail from '@/components/ui/SlideRail.vue'
 import { useI18n } from '@/helpers/i18n.js'
 import { isDev, getOS, openUrl } from '@/helpers/utils.js'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -162,13 +163,15 @@ const handleClose = async () => {
 function beginDrag(event) {
   if (event.button !== 0) return
   const block = event.target?.closest?.(
-    'button, a, input, textarea, select, .no-drag, .window-controls, .titlebar-button, .win-btn, .account-card, .collapsed-button, .avatar-button',
+    'button, a, input, textarea, select, .no-drag, .window-controls, .titlebar-button',
   )
   if (block) return
-  invoke('drag_window')
-  getCurrentWindow()
-    .startDragging()
-    .catch(() => {})
+  // One drag path only — Windows uses native drag_window; fallback to Tauri API.
+  invoke('drag_window').catch(() => {
+    getCurrentWindow()
+      .startDragging()
+      .catch(() => {})
+  })
 }
 
 const isOnBrowse = computed(() => route.path.startsWith('/browse'))
@@ -264,18 +267,11 @@ async function handleCommand(e) {
 <template>
   <SplashScreen v-if="!stateFailed" ref="splashScreen" data-tauri-drag-region />
   <div v-if="stateInitialized" class="app-container">
-    <div class="nav-container" @mousedown="beginDrag">
+    <div class="nav-container">
       <div class="nav-section">
-        <suspense>
-          <AccountsCard ref="accounts" mode="small" />
-        </suspense>
-        <SlideRail class="pages-list">
-          <RouterLink
-            v-tooltip="i18n('nav.home')"
-            to="/"
-            active-class=""
-            class="btn icon-only collapsed-button"
-          >
+        <AccountsCard ref="accounts" mode="small" />
+        <div class="pages-list">
+          <RouterLink v-tooltip="i18n('nav.home')" to="/" class="btn icon-only collapsed-button">
             <HomeIcon />
           </RouterLink>
           <RouterLink
@@ -291,46 +287,46 @@ async function handleCommand(e) {
           <RouterLink v-tooltip="i18n('nav.library')" to="/library" class="btn icon-only collapsed-button">
             <LibraryIcon />
           </RouterLink>
-          <div class="nav-divider" />
+          <RouterLink v-tooltip="i18n('nav.skins')" to="/skins" class="btn icon-only collapsed-button">
+            <UserIcon />
+          </RouterLink>
+          <RouterLink v-tooltip="i18n('nav.servers')" to="/servers" class="btn icon-only collapsed-button">
+            <ServerIcon />
+          </RouterLink>
           <Suspense>
             <QuickInstanceSwitcher />
           </Suspense>
-        </SlideRail>
+          <Suspense>
+            <InstanceCreationModal ref="installationModal" />
+          </Suspense>
+        </div>
       </div>
-      <SlideRail class="settings pages-list">
-        <!-- <button
-          v-if="updateAvailable"
-          v-tooltip="'Install update'"
-          class="btn btn-outline btn-primary icon-only collapsed-button"
-          @click="restartApp()"
-        >
-          <DownloadIcon />
-        </button> -->
+      <div class="settings pages-list">
         <Button
           v-tooltip="i18n('nav.create')"
           class="sleek-primary collapsed-button"
           icon-only
           :disabled="offline"
-          @click="() => $refs.installationModal?.show?.()"
+          @click="() => $refs.installationModal.show()"
         >
           <PlusIcon />
         </Button>
         <RouterLink v-tooltip="i18n('nav.settings')" to="/settings" class="btn icon-only collapsed-button">
           <SettingsIcon />
         </RouterLink>
-      </SlideRail>
+      </div>
     </div>
     <div class="view">
       <div v-if="criticalErrorMessage" class="critical-error-banner" data-tauri-drag-region>
         <h1>{{ criticalErrorMessage.header }}</h1>
         <div class="markdown-body" v-html="renderString(criticalErrorMessage.body ?? '')"></div>
       </div>
-      <div class="appbar-row" @mousedown="beginDrag">
-        <div data-tauri-drag-region class="appbar">
+      <div class="appbar-row">
+        <div class="appbar" @mousedown="beginDrag">
           <section class="navigation-controls">
             <Breadcrumbs data-tauri-drag-region />
           </section>
-          <section class="mod-stats no-drag">
+          <section class="mod-stats">
             <Suspense>
               <RunningAppBar />
             </Suspense>
@@ -354,9 +350,10 @@ async function handleCommand(e) {
         </section>
       </div>
       <div class="router-view">
-        <div class="loading-line-host">
-          <ModrinthLoadingIndicator />
-        </div>
+        <ModrinthLoadingIndicator
+          offset-height="var(--appbar-height)"
+          offset-width="var(--sidebar-width)"
+        />
         <RouterView v-slot="{ Component }">
           <template v-if="Component">
             <Suspense @pending="loading.startLoading()" @resolve="loading.stopLoading()">
@@ -370,9 +367,6 @@ async function handleCommand(e) {
       </div>
     </div>
   </div>
-  <Suspense>
-    <InstanceCreationModal ref="installationModal" />
-  </Suspense>
   <URLConfirmModal ref="urlModal" />
   <Notifications ref="notificationsWrapper" />
   <ErrorModal ref="errorModal" />
@@ -390,6 +384,7 @@ async function handleCommand(e) {
 .navigation-controls {
   flex-grow: 1;
   width: min-content;
+  min-width: 0;
 }
 
 .appbar-row {
@@ -398,27 +393,6 @@ async function handleCommand(e) {
   display: flex;
   flex-direction: row;
   min-height: 3.25rem;
-  overflow: hidden;
-  cursor: grab;
-}
-
-.loading-line-host {
-  position: sticky;
-  top: 0;
-  left: 0;
-  width: 100%;
-  max-width: 100%;
-  height: 3px;
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 6;
-}
-
-.nav-divider {
-  height: 1px;
-  width: 1.5rem;
-  margin: 0.15rem auto;
-  background: var(--color-button-bg);
 }
 
 .window-controls {
@@ -426,6 +400,8 @@ async function handleCommand(e) {
   display: none;
   flex-direction: row;
   align-items: center;
+  gap: 0.45rem;
+  padding-right: 0.5rem;
 
   .titlebar-button {
     display: flex;
@@ -435,17 +411,12 @@ async function handleCommand(e) {
     transition: all ease-in-out 0.1s;
     background-color: transparent !important;
     color: var(--color-base);
-    height: 100%;
-    width: 3rem;
-    min-width: 3rem;
+    height: 3.25rem;
+    width: 3.15rem;
+    min-width: 3.15rem;
     border-radius: 0 !important;
     position: relative;
     box-shadow: none !important;
-
-    &:last-child {
-      padding-right: 0.75rem;
-      width: 3.75rem;
-    }
 
     svg {
       width: 1.25rem;
@@ -455,24 +426,33 @@ async function handleCommand(e) {
     &::before {
       content: '';
       border-radius: 999999px;
-      width: 3rem;
-      height: 3rem;
+      width: 2.75rem;
+      height: 2.75rem;
       aspect-ratio: 1 / 1;
       margin-block: auto;
       position: absolute;
+      left: 50%;
+      top: 50%;
+      translate: -50% -50%;
       background-color: transparent;
-      scale: 0.9;
+      scale: 0.88;
       transition: all ease-in-out 0.2s;
       z-index: -1;
     }
 
     &.close {
+      &::before {
+        width: 3rem;
+        height: 3rem;
+      }
+
       &:hover,
       &:active {
         color: var(--color-accent-contrast);
 
         &::before {
           background-color: var(--color-red);
+          scale: 1;
         }
       }
     }
@@ -500,8 +480,6 @@ async function handleCommand(e) {
 
   .view {
     width: calc(100% - var(--sidebar-width));
-    min-width: 0;
-    overflow: hidden;
     background-color: var(--color-raised-bg);
 
     .critical-error-banner {
@@ -529,7 +507,6 @@ async function handleCommand(e) {
     }
 
     .router-view {
-      position: relative;
       width: 100%;
       height: calc(100% - 3.125rem);
       overflow: auto;
@@ -550,7 +527,6 @@ async function handleCommand(e) {
   background-color: var(--color-raised-bg);
   box-shadow: var(--shadow-inset-sm), var(--shadow-floating);
   padding: 0.85rem 0;
-  overflow: hidden;
 }
 
 .pages-list {
@@ -566,14 +542,14 @@ async function handleCommand(e) {
     align-items: center;
     word-spacing: 3px;
     background: inherit;
-    transition: color 0.28s ease, background-color 0.28s ease;
+    transition: all ease-in-out 0.1s;
     color: var(--color-base);
     box-shadow: none;
 
     &.router-link-active {
       color: var(--color-contrast);
-      background: transparent;
-      box-shadow: none;
+      background: var(--color-button-bg);
+      box-shadow: var(--shadow-floating);
     }
 
     &:hover {
@@ -601,7 +577,6 @@ async function handleCommand(e) {
   display: flex !important;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
   box-sizing: border-box;
   margin-inline: auto;
 
@@ -619,8 +594,9 @@ async function handleCommand(e) {
   justify-content: flex-start;
   align-items: center;
   width: 100%;
-  height: 100%;
-  gap: 1rem;
+  flex: 1;
+  min-height: 0;
+  gap: 0.45rem;
 }
 
 .button-row {
@@ -653,25 +629,6 @@ async function handleCommand(e) {
 
   .window-controls {
     display: flex !important;
-  }
-
-  .nav-container .collapsed-button {
-    height: 3rem !important;
-    width: 3rem !important;
-    min-width: 3rem;
-    min-height: 3rem;
-    padding: 0.75rem !important;
-    display: flex !important;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    box-sizing: border-box;
-    margin-inline: auto;
-  }
-
-  .nav-container .collapsed-button svg {
-    width: 1.5rem !important;
-    height: 1.5rem !important;
   }
 
   .info-card {

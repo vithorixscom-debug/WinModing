@@ -1,8 +1,10 @@
 <script setup>
-import { onUnmounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { StopCircleIcon, PlayIcon } from '@modrinth/assets'
+import { StopCircleIcon, PlayIcon, HistoryIcon } from '@modrinth/assets'
 import { Card, Avatar } from '@modrinth/ui'
+import dayjs from 'dayjs'
+import relativeTime from 'dayjs/plugin/relativeTime'
 import { instanceIconSrc } from '@/helpers/instanceIcon.js'
 import { kill, run } from '@/helpers/profile'
 import { get_by_profile_path } from '@/helpers/process'
@@ -13,6 +15,8 @@ import { handleSevereError } from '@/store/error.js'
 import { instancePlaySeconds, playtimeLabel as formatPlayLabel } from '@/helpers/playtime.js'
 import { t, locale } from '@/helpers/i18n.js'
 
+dayjs.extend(relativeTime)
+
 const props = defineProps({
   instance: {
     type: Object,
@@ -20,7 +24,25 @@ const props = defineProps({
       return {}
     },
   },
+  compact: {
+    type: Boolean,
+    default: false,
+  },
+  featured: {
+    type: Boolean,
+    default: false,
+  },
+  canMoveUp: {
+    type: Boolean,
+    default: false,
+  },
+  canMoveDown: {
+    type: Boolean,
+    default: false,
+  },
 })
+
+const emit = defineEmits(['move-up', 'move-down'])
 
 const playing = ref(false)
 const launching = ref(false)
@@ -28,9 +50,19 @@ const launching = ref(false)
 const modLoading = computed(
   () => launching.value || props.instance.install_stage !== 'installed',
 )
+const playSeconds = computed(() => instancePlaySeconds(props.instance))
 const playtimeLabel = computed(() => {
   void locale.value
-  return formatPlayLabel(instancePlaySeconds(props.instance), t)
+  return formatPlayLabel(playSeconds.value, t)
+})
+const hasPlaytime = computed(() => playSeconds.value >= 60)
+const lastPlayedLabel = computed(() => {
+  void locale.value
+  const raw = props.instance.last_played
+  if (!raw) return t('instance.playtimeNever')
+  const parsed = dayjs(raw)
+  if (!parsed.isValid() || parsed.year() < 2000) return t('instance.playtimeNever')
+  return t('instance.playedAgo', { relativeTime: parsed.fromNow() })
 })
 
 const router = useRouter()
@@ -83,14 +115,89 @@ defineExpose({
 
 const unlisten = await process_listener((e) => {
   const event = String(e?.event || '').toLowerCase()
-  if (event === 'finished' && e.profile_path_id === props.instance.path) playing.value = false
+  const same =
+    e.profile_path_id === props.instance.path ||
+    e.profile_path === props.instance.path ||
+    e.path === props.instance.path
+  if (!same) return
+  if (event === 'finished') playing.value = false
+  if (event === 'launched' || event === 'starting') playing.value = true
+})
+
+onMounted(() => {
+  void checkProcess()
 })
 
 onUnmounted(() => unlisten())
 </script>
 
 <template>
-  <div class="instance">
+  <div
+    v-if="compact"
+    class="instance compact-instance button-base"
+    @click="seeInstance"
+    @mouseenter="checkProcess"
+  >
+    <Avatar
+      :key="props.instance.iconDataUrl || props.instance.icon_path || props.instance.path"
+      size="48px"
+      :src="instanceIconSrc(props.instance)"
+      :tint-by="props.instance.path"
+      alt="Instance icon"
+    />
+    <div class="compact-copy">
+      <p class="title">{{ props.instance.name }}</p>
+    </div>
+    <div v-if="props.canMoveUp || props.canMoveDown" class="reorder" @click.stop>
+      <button
+        v-if="props.canMoveUp"
+        type="button"
+        class="reorder-btn"
+        :title="t('library.moveUp')"
+        @click="emit('move-up')"
+      >
+        ↑
+      </button>
+      <button
+        v-if="props.canMoveDown"
+        type="button"
+        class="reorder-btn"
+        :title="t('library.moveDown')"
+        @click="emit('move-down')"
+      >
+        ↓
+      </button>
+    </div>
+    <button
+      v-if="playing"
+      class="compact-play stop"
+      type="button"
+      :title="t('instance.stop')"
+      @click="(e) => stop(e, 'InstanceCard')"
+    >
+      <StopCircleIcon />
+    </button>
+    <button
+      v-else-if="!modLoading"
+      class="compact-play"
+      :class="{ featured }"
+      type="button"
+      :title="t('instance.play')"
+      @click="(e) => play(e, 'InstanceCard')"
+    >
+      <PlayIcon />
+    </button>
+    <span v-else class="loading-indicator spin compact-spin" />
+    <div class="compact-meta">
+      <HistoryIcon />
+      <span>
+        {{ lastPlayedLabel }}
+        <template v-if="hasPlaytime"> · {{ playtimeLabel }}</template>
+        · {{ props.instance.loader }} {{ props.instance.game_version }}
+      </span>
+    </div>
+  </div>
+  <div v-else class="instance">
     <Card class="instance-card-item button-base" @click="seeInstance" @mouseenter="checkProcess">
       <Avatar
         :key="props.instance.iconDataUrl || props.instance.icon_path || props.instance.path"
@@ -271,6 +378,122 @@ onUnmounted(() => unlisten())
       opacity: 0.78;
       text-transform: none;
     }
+  }
+}
+
+.compact-instance {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: 0.75rem;
+  row-gap: 0.55rem;
+  padding: 0.85rem 1rem;
+  background: var(--color-raised-bg);
+  border: 1px solid var(--color-button-bg);
+  border-radius: 0.85rem;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  transition: filter 0.12s ease;
+
+  &:hover {
+    filter: brightness(1.08);
+  }
+
+  .compact-copy {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .reorder {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+    margin-right: 0.2rem;
+  }
+
+  .reorder-btn {
+    width: 1.5rem;
+    height: 1.15rem;
+    border: 1px solid var(--color-button-bg);
+    background: var(--color-raised-bg);
+    color: var(--color-contrast);
+    border-radius: 0.3rem;
+    cursor: pointer;
+    line-height: 1;
+    font-size: 0.72rem;
+    padding: 0;
+
+    &:hover {
+      background: var(--color-button-bg);
+    }
+  }
+
+  .title {
+    margin: 0;
+    font-weight: 700;
+    color: var(--color-contrast);
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .compact-play {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.35rem;
+    height: 2.35rem;
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--color-button-bg);
+    color: var(--color-contrast);
+    cursor: pointer;
+
+    svg {
+      width: 1.15rem;
+      height: 1.15rem;
+      transform: translateX(1px);
+    }
+
+    &.featured {
+      background: var(--color-brand);
+      color: var(--color-accent-contrast);
+    }
+
+    &.stop {
+      background: var(--color-red);
+      color: var(--color-accent-contrast);
+    }
+  }
+
+  .compact-meta {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+    color: var(--color-secondary);
+    font-size: 0.8rem;
+    font-weight: 600;
+
+    svg {
+      width: 0.95rem;
+      height: 0.95rem;
+      flex-shrink: 0;
+    }
+
+    span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-transform: capitalize;
+    }
+  }
+
+  .compact-spin {
+    width: 1.5rem;
+    height: 1.5rem;
   }
 }
 

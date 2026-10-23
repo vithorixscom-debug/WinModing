@@ -4,7 +4,7 @@
     @click="openProject"
   >
     <div class="icon">
-      <Avatar :src="project.icon_url" size="md" class="search-icon" />
+      <ProxiedAvatar :src="project.icon_url" size="md" class="search-icon" :tint-by="project.slug || project.project_id" />
     </div>
     <div class="content-wrapper">
       <div class="title joined-text">
@@ -70,7 +70,8 @@
 
 <script setup>
 import { DownloadIcon, HeartIcon, CalendarIcon, CheckIcon, StarIcon } from '@modrinth/assets'
-import { Avatar, Card, Categories, EnvironmentIndicator, Button } from '@modrinth/ui'
+import { Card, Categories, EnvironmentIndicator, Button } from '@modrinth/ui'
+import ProxiedAvatar from '@/components/ui/ProxiedAvatar.vue'
 import { formatNumber, formatCategory } from '@modrinth/utils'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'

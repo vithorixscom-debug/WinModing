@@ -63,20 +63,29 @@ const maxMemory = ref(Math.floor(((await get_max_memory().catch(handleError)) ||
 
 watch(
   settings,
-  async (oldSettings, newSettings) => {
-    if (oldSettings.loaded_config_dir !== newSettings.loaded_config_dir) {
+  async (newSettings, oldSettings) => {
+    // Vue 3 watch: (newValue, oldValue). Saving oldValue was why catalog/settings looked unsaved.
+    if (!newSettings) return
+    if (
+      oldSettings &&
+      oldSettings.loaded_config_dir !== newSettings.loaded_config_dir
+    ) {
       return
     }
 
     const setSettings = JSON.parse(JSON.stringify(newSettings))
 
-    setSettings.extra_launch_args = setSettings.launchArgs.trim().split(/\s+/).filter(Boolean)
-    setSettings.custom_env_vars = setSettings.envVars
+    setSettings.extra_launch_args = String(setSettings.launchArgs ?? '')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+    setSettings.custom_env_vars = String(setSettings.envVars ?? '')
       .trim()
       .split(/\s+/)
       .filter(Boolean)
       .map((x) => x.split('=').filter(Boolean))
 
+    setSettings.hooks = setSettings.hooks || {}
     if (!setSettings.hooks.pre_launch) {
       setSettings.hooks.pre_launch = null
     }
@@ -91,7 +100,7 @@ watch(
       setSettings.custom_dir = null
     }
 
-    await set(setSettings)
+    await set(setSettings).catch(handleError)
   },
   { deep: true },
 )

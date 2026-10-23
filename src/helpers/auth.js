@@ -4,13 +4,18 @@ const DEFAULT_KEY = "winmoding.defaultUser";
 
 function toCredential(account) {
   if (!account) return null;
-  const kind = account.kind ?? (account.access_token && account.access_token !== "0" ? "microsoft" : "offline");
+  const kind =
+    account.kind ??
+    (account.access_token && account.access_token !== "0" ? "microsoft" : "offline");
   return {
     id: account.id,
     username: account.username,
     uuid: account.uuid,
     active: true,
     kind,
+    sessionOk: !!account.sessionOk || !!account.session_ok,
+    userType: account.userType || account.user_type || (kind === "microsoft" ? "msa" : kind === "ely" ? "mojang" : "legacy"),
+    // UI-only marker — launch always loads the real JWT from the Rust DB by account id.
     access_token: kind === "offline" ? null : kind,
     profile: {
       name: account.username,

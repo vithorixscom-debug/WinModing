@@ -24,14 +24,6 @@
     @ignore="ignoreUpdate"
     @deps="downloadDependencies"
   />
-  <Pagination
-    v-if="projects.length > 0"
-    :page="currentPage"
-    :count="Math.ceil(search.length / 20)"
-    class="pagination-before"
-    :link-function="(page) => `?page=${page}`"
-    @switch-page="switchPage"
-  />
   <Card v-if="projects.length > 0" class="list-card">
     <div class="table">
       <div class="table-row table-head" :class="{ 'show-options': selected.length > 0 }">
@@ -187,7 +179,7 @@
             :disabled="offline"
             class="mod-content"
           >
-            <Avatar :src="mod.icon" />
+            <ProxiedAvatar :src="mod.icon" size="sm" :tint-by="mod.slug || mod.id || mod.name" />
             <div class="mod-text">
               <div class="title">{{ mod.name }}</div>
               <span v-if="mod.source" class="source-tag">{{ sourceName(mod.source) }}</span>
@@ -195,7 +187,7 @@
             </div>
           </router-link>
           <div v-else class="mod-content">
-            <Avatar :src="mod.icon" />
+            <ProxiedAvatar :src="mod.icon" size="sm" :tint-by="mod.slug || mod.id || mod.name" />
             <div class="mod-text">
               <span v-tooltip="`${mod.name}`" class="title">{{ mod.name }}</span>
               <span v-if="mod.source" class="source-tag">{{ sourceName(mod.source) }}</span>
@@ -338,7 +330,6 @@ import {
   Pagination,
   DropdownSelect,
   Checkbox,
-  Avatar,
   Button,
   Card,
 } from '@modrinth/ui'
@@ -356,6 +347,7 @@ import { handleError } from '@/store/notifications.js'
 import { listen } from '@tauri-apps/api/event'
 import { t as i18n } from '@/helpers/i18n.js'
 import { MenuIcon, ToggleIcon, TextInputIcon, AddProjectImage } from '@/assets/icons'
+import ProxiedAvatar from '@/components/ui/ProxiedAvatar.vue'
 import ExportModal from '@/components/ui/ExportModal.vue'
 import ModpackVersionModal from '@/components/ui/ModpackVersionModal.vue'
 import AddContentButton from '@/components/ui/AddContentButton.vue'
@@ -589,20 +581,25 @@ async function initProjects(cacheBehaviour) {
       project.slug = api.slug
       project.author = owner || project.author
       project.version = version?.version_number ?? project.version
-      project.icon = api.icon_url || project.icon
+      project.icon = api.icon_url || api.iconUrl || project.icon
       project.project_type = api.project_type || project.project_type
       project.id = api.id
     }
 
-    const numeric = hydrated.filter((mod) => /^\d+$/.test(String(mod.id || '')))
+    // Backfill icons/names for anything the batch call missed (common for some Modrinth IDs).
+    const needMeta = hydrated.filter((mod) => mod.id || mod.slug)
     await Promise.all(
-      numeric.map(async (mod) => {
-        const data = await invoke('get_catalog_project', { id: String(mod.id) }).catch(() => null)
+      needMeta.map(async (mod) => {
+        if (mod.icon && mod.name && mod.slug) return
+        const key = String(mod.id || mod.slug || '')
+        if (!key) return
+        const data = await invoke('get_catalog_project', { id: key }).catch(() => null)
         if (!data) return
         mod.name = data.title || data.name || mod.name
         mod.icon = data.icon_url || data.iconUrl || mod.icon
         mod.slug = data.slug || mod.slug
         mod.project_type = data.project_type || data.projectType || mod.project_type
+        if (data.id) mod.id = data.id
       }),
     )
     projects.value = uniqueProjects(hydrated)

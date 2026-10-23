@@ -104,11 +104,19 @@ const emit = defineEmits([
     flex-direction: row;
     flex-wrap: nowrap;
     align-items: center;
+    gap: 1.15rem;
     min-width: 0;
 
     :deep(.chips) {
       flex-wrap: nowrap;
       flex-shrink: 0;
+      margin-right: 0.35rem;
+    }
+
+    .iconified-input {
+      flex: 1;
+      min-width: 12rem;
+      margin-left: 0.25rem;
     }
   }
 }
@@ -118,6 +126,7 @@ const emit = defineEmits([
   flex-direction: row;
   flex-wrap: nowrap;
   align-items: center;
+  gap: 1.15rem;
 
   .chips {
     flex-wrap: nowrap;

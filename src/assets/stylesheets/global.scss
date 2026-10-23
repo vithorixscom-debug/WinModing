@@ -112,3 +112,11 @@ img {
 }
 
 @import '@modrinth/assets/omorphia.scss';
+
+.btn svg,
+.collapsed-button svg,
+.titlebar-button svg {
+  color: inherit;
+  overflow: visible;
+  flex-shrink: 0;
+}

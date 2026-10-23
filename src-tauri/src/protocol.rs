@@ -2,7 +2,7 @@
 
 use crate::error::LauncherError;
 
-pub const USER_AGENT: &str = "WinModing/0.3.0 (https://github.com/vithorixscom-debug/WinModing)";
+pub const USER_AGENT: &str = "WinModing/0.3.1 (https://github.com/vithorixscom-debug/WinModing)";
 
 pub const MODRINTH_API: &str = "https://api.modrinth.com/v2";
 pub const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
@@ -45,7 +45,23 @@ const TRUSTED_DOWNLOAD_HOSTS: &[&str] = &[
     "edge.forgecdn.net",
     "mediafilez.forgecdn.net",
     "media.forgecdn.net",
+    "www.curseforge.com",
+    "curseforge.com",
+    "static-beta.curseforge.com",
+    "forums.curseforge.com",
     "launchermeta.mojang.com",
+    "mc-heads.net",
+    "crafatar.com",
+    "minotar.net",
+    "crafthead.net",
+    "visage.surgeplay.com",
+    "sessionserver.mojang.com",
+    "textures.minecraft.net",
+    "api.mcsrvstat.us",
+    // Millida rating catalogue icons / uploads (server list logos).
+    "cdn.millida.trade",
+    "media.millida.trade",
+    "static.millida.trade",
 ];
 
 /// RF catalog/file relay. Path-locked so other hosts on this domain
@@ -58,6 +74,9 @@ pub fn is_millida_relay(url: &reqwest::Url) -> bool {
             path.starts_with("/v2/launcher/dl")
                 || path.starts_with("/v2/launcher/mr")
                 || path.starts_with("/v2/launcher/cf")
+                // Public server recommendations (no auth); path-locked like launcher relays.
+                || path == "/v2/rating/servers"
+                || path.starts_with("/v2/rating/servers/")
         }
 }
 
@@ -119,6 +138,19 @@ pub const MS_TOKEN: &str = "https://login.live.com/oauth20_token.srf";
 pub const MS_DESKTOP_REDIRECT: &str = "https://login.live.com/oauth20_desktop.srf";
 /// Public Xbox/Minecraft launcher client used by Prism, MultiMC, and the official launcher.
 pub const MS_XBOX_PUBLIC_CLIENT: &str = "00000000402b5328";
+/// Fallback Azure public client for device-code login (open-source Millida id).
+/// End users never register Azure — override builds with `WINMODING_MS_CLIENT_ID`.
+pub const MS_DEVICE_CLIENT_FALLBACK: &str = "499c8d36-be2a-4231-9ebd-ef291b7bb64c";
+pub const MS_DEVICE_CODE: &str =
+    "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
+pub const MS_AAD_TOKEN: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
+
+pub fn ms_device_client_id() -> &'static str {
+    match option_env!("WINMODING_MS_CLIENT_ID") {
+        Some(id) if !id.trim().is_empty() => id.trim(),
+        _ => MS_DEVICE_CLIENT_FALLBACK,
+    }
+}
 pub const ELY_AUTHENTICATE: &str = "https://authserver.ely.by/auth/authenticate";
 pub const XBL_AUTHENTICATE: &str = "https://user.auth.xboxlive.com/user/authenticate";
 pub const XSTS_AUTHORIZE: &str = "https://xsts.auth.xboxlive.com/xsts/authorize";
@@ -284,8 +316,17 @@ mod tests {
     fn trusted_https_rejects_http_and_unknown_host() {
         assert!(assert_trusted_https("http://meta.fabricmc.net/x").is_err());
         assert!(assert_trusted_https("https://evil.example/x").is_err());
-        assert!(assert_trusted_https("https://api.millida.net/v2/rating/servers").is_err());
+        assert!(assert_trusted_https("https://api.millida.net/v2/rating/servers").is_ok());
+        assert!(assert_trusted_https(
+            "https://api.millida.net/v2/rating/servers/versions"
+        )
+        .is_ok());
+        assert!(assert_trusted_https("https://api.millida.net/v2/rating/votes").is_err());
         assert!(assert_trusted_https("https://garage.millida.net/a.zip").is_err());
+        assert!(assert_trusted_https(
+            "https://cdn.millida.trade/rating/server-icons/demo.webp"
+        )
+        .is_ok());
     }
 
     #[test]

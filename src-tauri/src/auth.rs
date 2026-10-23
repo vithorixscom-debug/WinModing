@@ -13,11 +13,14 @@ use crate::domain::StoredAccount;
 use crate::error::LauncherError;
 use crate::net::HttpPool;
 use crate::protocol::{
-    ELY_AUTHENTICATE, MC_LOGIN_XBOX, MC_PROFILE, MS_AUTHORIZE, MS_DESKTOP_REDIRECT, MS_TOKEN,
-    MS_XBOX_PUBLIC_CLIENT, XBL_AUTHENTICATE, XSTS_AUTHORIZE,
+    ms_device_client_id, ELY_AUTHENTICATE, MC_LOGIN_XBOX, MC_PROFILE, MS_AAD_TOKEN, MS_AUTHORIZE,
+    MS_DESKTOP_REDIRECT, MS_DEVICE_CODE, MS_TOKEN, MS_XBOX_PUBLIC_CLIENT, XBL_AUTHENTICATE,
+    XSTS_AUTHORIZE,
 };
 
 const AUTH_TIMEOUT_SECS: u64 = 180;
+/// Device-code sessions from Microsoft last ~15 minutes; keep polling that long.
+const DEVICE_AUTH_TIMEOUT_SECS: u64 = 900;
 
 pub fn offline_uuid(username: &str) -> String {
     let mut digest = Md5::new();
@@ -111,12 +114,268 @@ pub async fn login_microsoft(
     exchange_xbox(http, token, true).await
 }
 
+/// Device-code Microsoft login (Millida-style): password is typed on microsoft.com in the
+/// system browser (VPN/proxy friendly for RU IPs). No Azure registration for end users.
+/// Embedded WebView2 is intentionally not used — on RU IPs it often loads without CSS and breaks.
+pub async fn login_microsoft_device(
+    app: &tauri::AppHandle,
+    http: &HttpPool,
+) -> Result<StoredAccount, LauncherError> {
+    use tauri::Emitter;
+
+    let client_id = ms_device_client_id();
+    let start = http
+        .post_form_value(
+            MS_DEVICE_CODE,
+            &[
+                ("client_id", client_id),
+                ("scope", "XboxLive.signin offline_access"),
+            ],
+        )
+        .await?;
+    if let Some(err) = start.get("error").and_then(|v| v.as_str()) {
+        let desc = start
+            .get("error_description")
+            .and_then(|v| v.as_str())
+            .unwrap_or(err);
+        return Err(LauncherError::Auth {
+            reason: desc.to_string(),
+        });
+    }
+    let user_code = start
+        .get("user_code")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| LauncherError::Auth {
+            reason: "Microsoft did not issue a device code".into(),
+        })?
+        .to_string();
+    let device_code = start
+        .get("device_code")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| LauncherError::Auth {
+            reason: "Microsoft did not issue a device code".into(),
+        })?
+        .to_string();
+    let verification_uri = start
+        .get("verification_uri")
+        .and_then(|v| v.as_str())
+        .unwrap_or("https://www.microsoft.com/link")
+        .to_string();
+    let open_uri = start
+        .get("verification_uri_complete")
+        .and_then(|v| v.as_str())
+        .unwrap_or(verification_uri.as_str())
+        .to_string();
+    let interval = start
+        .get("interval")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .max(2);
+    let expires_in = start
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(DEVICE_AUTH_TIMEOUT_SECS)
+        .clamp(120, DEVICE_AUTH_TIMEOUT_SECS);
+    let message = start
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Enter the code on the Microsoft page")
+        .to_string();
+
+    let _ = app.emit(
+        "msa-device-code",
+        serde_json::json!({
+            "userCode": user_code,
+            "verificationUri": verification_uri,
+            "openUri": open_uri,
+            "message": message,
+        }),
+    );
+    if let Err(err) = open_browser(&open_uri) {
+        log::warn!("could not open Microsoft login browser: {err}");
+    }
+
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_secs(expires_in.saturating_sub(15));
+    let mut sleep_secs = interval;
+    let mut first = true;
+    let token = loop {
+        if tokio::time::Instant::now() > deadline {
+            let _ = app.emit("msa-device-code", serde_json::json!({ "done": true }));
+            return Err(LauncherError::Auth {
+                reason: "Microsoft login timed out — finish the browser page within ~15 minutes, with VPN/proxy if Microsoft is blocked"
+                    .into(),
+            });
+        }
+        if !first {
+            tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)).await;
+        }
+        first = false;
+
+        let poll = match http
+            .post_form_value(
+                MS_AAD_TOKEN,
+                &[
+                    ("client_id", client_id),
+                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                    ("device_code", device_code.as_str()),
+                ],
+            )
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                // Transient proxy / DNS blips while the user is still on the Microsoft page.
+                log::warn!("Microsoft device-code poll network error (retrying): {err}");
+                sleep_secs = sleep_secs.saturating_add(1).min(15);
+                continue;
+            }
+        };
+        if let Some(err) = poll.get("error").and_then(|v| v.as_str()) {
+            match err {
+                "authorization_pending" => continue,
+                "slow_down" => {
+                    sleep_secs = sleep_secs.saturating_add(2).min(15);
+                    continue;
+                }
+                "expired_token" | "code_expired" => {
+                    let _ = app.emit("msa-device-code", serde_json::json!({ "done": true }));
+                    return Err(LauncherError::Auth {
+                        reason: "Microsoft login code expired — try again".into(),
+                    });
+                }
+                other => {
+                    let desc = poll
+                        .get("error_description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(other);
+                    // Stale parallel poll (should no longer happen): ask user to retry once.
+                    if desc.contains("AADSTS70000") || desc.contains("already been used") {
+                        let _ = app.emit("msa-device-code", serde_json::json!({ "done": true }));
+                        return Err(LauncherError::Auth {
+                            reason: "Код Microsoft уже использован — нажми вход ещё раз и сразу заверши в браузере".into(),
+                        });
+                    }
+                    let _ = app.emit("msa-device-code", serde_json::json!({ "done": true }));
+                    return Err(LauncherError::Auth {
+                        reason: desc.to_string(),
+                    });
+                }
+            }
+        }
+        let access = poll
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| LauncherError::Auth {
+                reason: "Microsoft did not return an access token".into(),
+            })?
+            .to_string();
+        let refresh = poll
+            .get("refresh_token")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let token_expires = poll
+            .get("expires_in")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3600);
+        break MsToken {
+            access_token: access,
+            refresh_token: refresh,
+            expires_in: token_expires,
+        };
+    };
+
+    let _ = app.emit("msa-device-code", serde_json::json!({ "done": true }));
+    // Prefer a freshly discovered proxy set for Xbox → Minecraft (often blocked on RU IPs).
+    let routed = http.refresh_proxies().unwrap_or_else(|_| http.clone());
+    exchange_xbox(&routed, token, true).await
+}
+
+/// Refresh a device-code / AAD Microsoft session using the stored refresh_token.
+pub async fn refresh_microsoft(
+    http: &HttpPool,
+    refresh_token: &str,
+) -> Result<StoredAccount, LauncherError> {
+    let client_id = ms_device_client_id();
+    let poll = http
+        .post_form_value(
+            MS_AAD_TOKEN,
+            &[
+                ("client_id", client_id),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token),
+                ("scope", "XboxLive.signin offline_access"),
+            ],
+        )
+        .await?;
+    if let Some(err) = poll.get("error").and_then(|v| v.as_str()) {
+        let desc = poll
+            .get("error_description")
+            .and_then(|v| v.as_str())
+            .unwrap_or(err);
+        return Err(LauncherError::Auth {
+            reason: format!("Microsoft session expired — sign in again ({desc})"),
+        });
+    }
+    let access = poll
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| LauncherError::Auth {
+            reason: "Microsoft refresh did not return a token".into(),
+        })?
+        .to_string();
+    let refresh = poll
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .or_else(|| Some(refresh_token.to_string()));
+    let expires_in = poll
+        .get("expires_in")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(3600);
+    exchange_xbox(
+        http,
+        MsToken {
+            access_token: access,
+            refresh_token: refresh,
+            expires_in,
+        },
+        true,
+    )
+    .await
+}
+
+/// Keep a Microsoft account usable: refresh when close to expiry.
+pub async fn ensure_microsoft_fresh(
+    http: &HttpPool,
+    account: StoredAccount,
+) -> Result<StoredAccount, LauncherError> {
+    if account.kind != "microsoft" {
+        return Ok(account);
+    }
+    let now = unix_now() as i64;
+    let expires = account.expires_unix.unwrap_or(0);
+    if expires > now + 120 {
+        return Ok(account);
+    }
+    let Some(refresh) = account.refresh_token.clone().filter(|s| !s.is_empty()) else {
+        return Ok(account);
+    };
+    let mut fresh = refresh_microsoft(http, &refresh).await?;
+    // Preserve stable account id so the UI selection stays put.
+    fresh.id = account.id;
+    Ok(fresh)
+}
+
 /// Official Minecraft public-client flow (Xbox MBI_SSL + desktop redirect).
-/// Opens a WinModing window, waits for `oauth20_desktop.srf?code=`, no Azure app needed.
+/// Uses client `00000000402b5328` — same as Prism/MultiMC/official launcher. No Azure app.
 pub async fn login_microsoft_official(
     app: &tauri::AppHandle,
     http: &HttpPool,
 ) -> Result<StoredAccount, LauncherError> {
+    use std::sync::{Arc, Mutex};
     use tauri::Manager;
 
     let url = format!(
@@ -131,6 +390,10 @@ pub async fn login_microsoft_official(
     if let Some(existing) = app.get_webview_window("msa-login") {
         let _ = existing.close();
     }
+
+    let result_slot: Arc<Mutex<Option<Result<String, String>>>> = Arc::new(Mutex::new(None));
+    let result_nav = result_slot.clone();
+
     let window = tauri::WebviewWindowBuilder::new(
         app,
         "msa-login",
@@ -141,10 +404,30 @@ pub async fn login_microsoft_official(
     .center()
     .focused(true)
     .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+    .on_navigation(move |nav_url| {
+        let href = nav_url.as_str();
+        if href.starts_with(MS_DESKTOP_REDIRECT) {
+            let query = nav_url.query().unwrap_or("");
+            let mut slot = result_nav.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.is_none() {
+                if let Some(error) = query_param(query, "error") {
+                    let desc = query_param(query, "error_description").unwrap_or(error.clone());
+                    *slot = Some(Err(format!("Microsoft returned {desc}")));
+                } else if let Some(code) = query_param(query, "code") {
+                    *slot = Some(Ok(code));
+                } else {
+                    *slot = Some(Err("Microsoft login did not return a code".into()));
+                }
+            }
+            return false;
+        }
+        true
+    })
     .build()
     .map_err(|err| LauncherError::Auth {
         reason: format!("could not open Microsoft login: {err}"),
     })?;
+
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(AUTH_TIMEOUT_SECS);
     let code = loop {
         if tokio::time::Instant::now() > deadline {
@@ -153,31 +436,44 @@ pub async fn login_microsoft_official(
                 reason: "Microsoft login timed out".into(),
             });
         }
-        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-        let current = match window.url() {
-            Ok(url) => url,
-            Err(_) => {
+        if let Some(outcome) = result_slot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            let _ = window.close();
+            break outcome.map_err(|reason| LauncherError::Auth { reason })?;
+        }
+        // Fallback: poll URL in case on_navigation missed the redirect
+        if let Ok(current) = window.url() {
+            let href = current.as_str();
+            if href.starts_with(MS_DESKTOP_REDIRECT) {
+                let query = current.query().unwrap_or("");
+                let _ = window.close();
+                if let Some(error) = query_param(query, "error") {
+                    return Err(LauncherError::Auth {
+                        reason: format!("Microsoft returned {error}"),
+                    });
+                }
+                break query_param(query, "code").ok_or_else(|| LauncherError::Auth {
+                    reason: "Microsoft login did not return a code".into(),
+                })?;
+            }
+        } else {
+            // Window closed without a code
+            if result_slot
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_none()
+            {
                 return Err(LauncherError::Auth {
                     reason: "Microsoft login window was closed".into(),
                 });
             }
-        };
-        let href = current.as_str();
-        if href.starts_with(MS_DESKTOP_REDIRECT) {
-            let query = current.query().unwrap_or("");
-            let error = query_param(query, "error");
-            let code = query_param(query, "code");
-            let _ = window.close();
-            if let Some(error) = error {
-                return Err(LauncherError::Auth {
-                    reason: format!("Microsoft returned {error}"),
-                });
-            }
-            break code.ok_or_else(|| LauncherError::Auth {
-                reason: "Microsoft login did not return a code".into(),
-            })?;
         }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     };
+
     let token: MsToken = http
         .post_form(
             MS_TOKEN,
@@ -259,6 +555,47 @@ async fn exchange_xbox(
     token: MsToken,
     prefix_d: bool,
 ) -> Result<StoredAccount, LauncherError> {
+    match exchange_xbox_once(http, &token, prefix_d).await {
+        Ok(account) => Ok(account),
+        Err(err) if is_connect_auth_err(&err) => {
+            // VPN may have come up after launcher start — rediscover WinINet / local SOCKS.
+            log::warn!("Xbox/Minecraft auth network failed, refreshing proxies: {err}");
+            let fresh = http.refresh_proxies().unwrap_or_else(|_| http.clone());
+            for attempt in 0..3u64 {
+                match exchange_xbox_once(&fresh, &token, prefix_d).await {
+                    Ok(account) => return Ok(account),
+                    Err(retry_err) if is_connect_auth_err(&retry_err) && attempt < 2 => {
+                        tokio::time::sleep(std::time::Duration::from_millis(800 * (attempt + 1)))
+                            .await;
+                    }
+                    Err(retry_err) => {
+                        return Err(LauncherError::Auth {
+                            reason: format!(
+                                "{retry_err}. Включи system proxy / TUN в VPN (v2rayN, Hiddify, Clash) и повтори — api.minecraftservices.com с RU IP часто режется"
+                            ),
+                        });
+                    }
+                }
+            }
+            Err(err)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn is_connect_auth_err(err: &LauncherError) -> bool {
+    matches!(err, LauncherError::Network { .. })
+        || err
+            .to_string()
+            .to_lowercase()
+            .contains("error sending request")
+}
+
+async fn exchange_xbox_once(
+    http: &HttpPool,
+    token: &MsToken,
+    prefix_d: bool,
+) -> Result<StoredAccount, LauncherError> {
     let rps_ticket = if prefix_d {
         format!("d={}", token.access_token)
     } else {
@@ -300,14 +637,7 @@ async fn exchange_xbox(
         )
         .await?;
     let identity = format!("XBL3.0 x={uhs};{}", xsts.token);
-    let minecraft: MinecraftLogin = http
-        .post_json(
-            MC_LOGIN_XBOX,
-            &MinecraftLoginRequest {
-                identity_token: identity,
-            },
-        )
-        .await?;
+    let minecraft = post_minecraft_login(http, &identity).await?;
     let bearer = format!("Bearer {}", minecraft.access_token);
     let profile: MinecraftProfile = http
         .get_json(MC_PROFILE, &[("Authorization", bearer.as_str())])
@@ -322,9 +652,43 @@ async fn exchange_xbox(
         username: profile.name,
         uuid: profile.id,
         access_token: minecraft.access_token,
-        refresh_token: token.refresh_token,
+        refresh_token: token.refresh_token.clone(),
         expires_unix: Some(expires as i64),
     })
+}
+
+async fn post_minecraft_login(
+    http: &HttpPool,
+    identity_token: &str,
+) -> Result<MinecraftLogin, LauncherError> {
+    let mut last = None;
+    for attempt in 0..3u64 {
+        match http
+            .post_json::<MinecraftLogin>(
+                MC_LOGIN_XBOX,
+                &MinecraftLoginRequest {
+                    identity_token: identity_token.to_string(),
+                },
+            )
+            .await
+        {
+            Ok(login) => return Ok(login),
+            Err(err) => {
+                let text = err.to_string();
+                let retryable = is_connect_auth_err(&err)
+                    || text.contains("HTTP 429")
+                    || text.contains("HTTP 5");
+                last = Some(err);
+                if !retryable || attempt == 2 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1200 * (attempt + 1))).await;
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| LauncherError::Auth {
+        reason: "Minecraft login_with_xbox failed".into(),
+    }))
 }
 
 fn pkce_pair() -> (String, String) {

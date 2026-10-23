@@ -1,8 +1,8 @@
 # WinModing
 
-**A Modrinth-based Minecraft launcher with CurseForge.**
+**A Modrinth App fork with CurseForge, RF-friendly relays, and in-launcher servers.**
 
-WinModing is a Windows desktop fork of the Modrinth App UI (Theseus / AstralRinth), with Modrinth and CurseForge in one catalog. You never paste API keys. Microsoft login uses the public Minecraft client.
+WinModing is a Windows desktop launcher based on the Modrinth App UI (Theseus / AstralRinth lineage), extended for players who need Modrinth **and** CurseForge in one place — including networks where official APIs are unreliable. You never paste API keys. Microsoft login uses the public Minecraft Xbox client.
 
 <p align="center">
   <img src="src-tauri/icons/icon-256.png" alt="WinModing" width="128" height="128">
@@ -12,15 +12,18 @@ WinModing is a Windows desktop fork of the Modrinth App UI (Theseus / AstralRint
 
 ## What you get
 
-- **Modrinth + CurseForge** in the same Browse tab (or one site at a time)
-- No CurseForge / Modrinth API key to paste — public catalog relays are used when needed
+- **Modrinth fork UI** — familiar Browse / Library / instance flow from the Modrinth App family
+- **Modrinth + CurseForge** in the same catalog (or one source at a time)
+- **RF / restricted-network bypasses** — Millida Modrinth & CurseForge relays, mirrors, and sticky-host failover when `api.modrinth.com` / ForgeCDN stall
+- **Servers in the launcher** — curated RF + abroad list, Millida rating catalogue, custom IPs, native Java SLP ping, one-click join into a selected profile
 - Isolated profiles: mods, saves, and config stay per instance
 - From Browse (not inside a profile), **Download** saves jars into the launcher folder, not into a Minecraft instance
 - Fabric, Quilt, Forge, and NeoForge
 - Microsoft, Ely.by, and offline accounts — no Azure app setup
+- Optional Fabric/Quilt **auto-optimize** pack (version-matched Sodium/Lithium/… only — no mismatched jars)
+- Skin wardrobe with 3D preview (`skinview3d`)
 - Discord shows **Playing Minecraft** only while the game is running
 - Playtime on the profile, in hours
-- Optional Fabric auto-optimize pack when you create a profile
 - No telemetry, analytics, or ads
 
 ## Requirements
@@ -62,7 +65,7 @@ The release binary is `WinModing.exe`. Bundled installers: `npm run tauri build`
 
 ## Disclaimer
 
-WinModing is not affiliated with Mojang, Microsoft, Modrinth, CurseForge, or AstralRinth. Minecraft is a trademark of Mojang Synergies AB.
+WinModing is not affiliated with Mojang, Microsoft, Modrinth, CurseForge, Millida, or AstralRinth. Minecraft is a trademark of Mojang Synergies AB. Catalog relays are used only to reach public mod/server metadata and files; they are not an official Modrinth or CurseForge product.
 
 ## License
 

@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
+const CATEGORIES_URL = "https://api.modrinth.com/v2/tag/category";
+const LOADERS_URL = "https://api.modrinth.com/v2/tag/loader";
+
 export const FALLBACK_LOADERS = [
-  { name: "fabric", supported_project_types: ["mod", "modpack"] },
-  { name: "forge", supported_project_types: ["mod", "modpack"] },
-  { name: "quilt", supported_project_types: ["mod", "modpack"] },
-  { name: "neoforge", supported_project_types: ["mod", "modpack"] },
+  { name: "fabric", supported_project_types: ["mod", "modpack"], icon: "" },
+  { name: "forge", supported_project_types: ["mod", "modpack"], icon: "" },
+  { name: "quilt", supported_project_types: ["mod", "modpack"], icon: "" },
+  { name: "neoforge", supported_project_types: ["mod", "modpack"], icon: "" },
 ];
 
 function cat(name, header, projectType) {
@@ -63,11 +66,68 @@ export const FALLBACK_CATEGORIES = [
   ),
 ];
 
+let categoriesCache = null;
+let loadersCache = null;
+
+function withIcons(rows, fallback) {
+  if (!Array.isArray(rows) || rows.length === 0) return fallback;
+  return rows.map((item) => ({
+    name: item.name ?? item.Name ?? "",
+    header: item.header ?? item.Header ?? "categories",
+    project_type: item.project_type ?? item.projectType ?? "mod",
+    icon: item.icon ?? item.Icon ?? "",
+    supported_project_types: item.supported_project_types ?? item.supportedProjectTypes ?? [],
+  }));
+}
+
+function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 export async function get_categories() {
+  if (categoriesCache) return categoriesCache;
+  try {
+    const rows = await withTimeout(
+      invoke("catalog_get_json", { url: CATEGORIES_URL }),
+      8000,
+      null,
+    );
+    if (rows) {
+      const mapped = withIcons(rows, FALLBACK_CATEGORIES);
+      if (mapped.some((item) => item.icon)) {
+        categoriesCache = mapped;
+        return mapped;
+      }
+    }
+  } catch {
+    /* keep fallback names so Browse still opens */
+  }
+  categoriesCache = FALLBACK_CATEGORIES;
   return FALLBACK_CATEGORIES;
 }
 
 export async function get_loaders() {
+  if (loadersCache) return loadersCache;
+  try {
+    const rows = await withTimeout(
+      invoke("catalog_get_json", { url: LOADERS_URL }),
+      8000,
+      null,
+    );
+    if (rows) {
+      const mapped = withIcons(rows, FALLBACK_LOADERS);
+      if (mapped.some((item) => item.name)) {
+        loadersCache = mapped;
+        return mapped;
+      }
+    }
+  } catch {
+    /* keep fallback names */
+  }
+  loadersCache = FALLBACK_LOADERS;
   return FALLBACK_LOADERS;
 }
 

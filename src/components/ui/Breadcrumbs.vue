@@ -67,30 +67,52 @@ const breadcrumbs = computed(() => {
 .breadcrumbs {
   display: flex;
   flex-direction: row;
+  align-items: center;
+  min-width: 0;
 
   .breadcrumbs__item {
     display: flex;
     flex-direction: row;
-    vertical-align: center;
+    align-items: center;
     margin: auto 0;
 
     .chevron,
     a {
       margin: auto 0;
     }
+
+    .chevron {
+      width: 1rem;
+      height: 1rem;
+      opacity: 0.55;
+    }
   }
 
   .breadcrumbs__back,
   .breadcrumbs__reload,
   .breadcrumbs__forward {
-    margin: auto 0;
+    margin: auto 0.28rem;
     color: var(--color-base);
     height: unset;
     width: unset;
+    min-width: unset;
+    padding: 0.2rem;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+
+    &:hover {
+      color: var(--color-contrast);
+      background: transparent !important;
+    }
+  }
+
+  .breadcrumbs__back {
+    margin-left: 0;
   }
 
   .breadcrumbs__forward {
-    margin-right: 1rem;
+    margin-right: 1.1rem;
   }
 }
 

@@ -34,7 +34,8 @@ impl MetadataCache {
                 loader TEXT NOT NULL,
                 loader_version TEXT,
                 java_major INTEGER,
-                created_unix INTEGER NOT NULL
+                created_unix INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS accounts (
                 id TEXT PRIMARY KEY,
@@ -53,6 +54,15 @@ impl MetadataCache {
             );
             ",
         )?;
+        // Older DBs created before sort_order — add and backfill from created_unix.
+        let _ = conn.execute(
+            "ALTER TABLE instances ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE instances SET sort_order = created_unix WHERE sort_order = 0 OR sort_order IS NULL",
+            [],
+        );
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -111,9 +121,16 @@ impl MetadataCache {
         let db = self.conn.clone();
         spawn_db(move || {
             let conn = lock_db(&db);
+            let next_order: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM instances",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(record.created_unix);
             conn.execute(
-                "INSERT INTO instances (id, name, game_version, loader, loader_version, java_major, created_unix)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO instances (id, name, game_version, loader, loader_version, java_major, created_unix, sort_order)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     record.id,
                     record.name,
@@ -121,7 +138,12 @@ impl MetadataCache {
                     record.loader.as_str(),
                     record.loader_version,
                     record.java_major.map(|v| v as i64),
-                    record.created_unix
+                    record.created_unix,
+                    if record.sort_order == 0 {
+                        next_order
+                    } else {
+                        record.sort_order
+                    }
                 ],
             )?;
             Ok(())
@@ -134,8 +156,8 @@ impl MetadataCache {
         spawn_db(move || {
             let conn = lock_db(&db);
             let mut stmt = conn.prepare(
-                "SELECT id, name, game_version, loader, loader_version, java_major, created_unix
-                 FROM instances ORDER BY created_unix DESC",
+                "SELECT id, name, game_version, loader, loader_version, java_major, created_unix, sort_order
+                 FROM instances ORDER BY sort_order ASC, created_unix DESC",
             )?;
             let rows = stmt.query_map([], |row| {
                 let loader: String = row.get(3)?;
@@ -148,6 +170,7 @@ impl MetadataCache {
                     loader_version: row.get(4)?,
                     java_major: java_major.map(|v| v as u32),
                     created_unix: row.get(6)?,
+                    sort_order: row.get(7).unwrap_or(0),
                 })
             })?;
             let mut out = Vec::new();
@@ -165,7 +188,7 @@ impl MetadataCache {
         spawn_db(move || {
             let conn = lock_db(&db);
             let mut stmt = conn.prepare(
-                "SELECT id, name, game_version, loader, loader_version, java_major, created_unix
+                "SELECT id, name, game_version, loader, loader_version, java_major, created_unix, sort_order
                  FROM instances WHERE id = ?1",
             )?;
             let mut rows = stmt.query(params![id])?;
@@ -182,9 +205,52 @@ impl MetadataCache {
                 loader_version: row.get(4)?,
                 java_major: java_major.map(|v| v as u32),
                 created_unix: row.get(6)?,
+                sort_order: row.get(7).unwrap_or(0),
             }))
         })
         .await
+    }
+
+    /// Swap sort_order with the neighbour above (`up`) or below (`down`).
+    pub async fn move_instance(&self, id: &str, direction: &str) -> Result<Vec<InstanceRecord>, LauncherError> {
+        let db = self.conn.clone();
+        let id = id.to_string();
+        let up = direction.eq_ignore_ascii_case("up");
+        spawn_db(move || {
+            let conn = lock_db(&db);
+            let mut stmt = conn.prepare(
+                "SELECT id, sort_order FROM instances ORDER BY sort_order ASC, created_unix DESC",
+            )?;
+            let rows: Vec<(String, i64)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
+            let Some(idx) = rows.iter().position(|(row_id, _)| row_id == &id) else {
+                return Err(LauncherError::Message("instance not found".into()));
+            };
+            let swap_with = if up {
+                idx.checked_sub(1)
+            } else if idx + 1 < rows.len() {
+                Some(idx + 1)
+            } else {
+                None
+            };
+            if let Some(other) = swap_with {
+                let (id_a, order_a) = &rows[idx];
+                let (id_b, order_b) = &rows[other];
+                conn.execute(
+                    "UPDATE instances SET sort_order = ?2 WHERE id = ?1",
+                    params![id_a, order_b],
+                )?;
+                conn.execute(
+                    "UPDATE instances SET sort_order = ?2 WHERE id = ?1",
+                    params![id_b, order_a],
+                )?;
+            }
+            Ok(())
+        })
+        .await?;
+        self.list_instances().await
     }
 
     pub async fn update_instance(&self, record: InstanceRecord) -> Result<(), LauncherError> {

@@ -1,9 +1,8 @@
 use tauri::{AppHandle, State};
 
-use crate::auth::{self, login_microsoft};
+use crate::auth;
 use crate::domain::AccountView;
 use crate::error::LauncherError;
-use crate::protocol::MS_XBOX_PUBLIC_CLIENT;
 use crate::state::AppState;
 
 #[tauri::command]
@@ -19,6 +18,8 @@ pub async fn login_offline(
     Ok(view)
 }
 
+/// Microsoft login via device code in the system browser only.
+/// Embedded WebView fallback is disabled — it breaks on RU IPs (no CSS / blocked assets).
 #[tauri::command]
 pub async fn login_msa(
     app: AppHandle,
@@ -26,13 +27,8 @@ pub async fn login_msa(
 ) -> Result<AccountView, LauncherError> {
     let http = state.http.clone();
     let cache = state.cache.clone();
-    let custom = state.paths.read_microsoft_client_id();
     drop(state);
-    let account = if custom.trim().is_empty() || custom.trim() == MS_XBOX_PUBLIC_CLIENT {
-        auth::login_microsoft_official(&app, &http).await?
-    } else {
-        login_microsoft(&http, &custom).await?
-    };
+    let account = auth::login_microsoft_device(&app, &http).await?;
     let view = account.view();
     cache.upsert_account(account).await?;
     Ok(view)

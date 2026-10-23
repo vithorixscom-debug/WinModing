@@ -11,8 +11,24 @@ function loaderName(loader) {
   return String(loader).toLowerCase();
 }
 
+/** Normalize unix-seconds / ms / ISO into an ISO string, or null if never played. */
+export function normalizePlayedAt(value) {
+  if (value == null || value === "" || value === 0 || value === "0") return null;
+  if (typeof value === "string" && Number.isNaN(Number(value)) && !Number.isNaN(Date.parse(value))) {
+    return new Date(value).toISOString();
+  }
+  const num = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  // Rust stores unix seconds; dayjs(ms) would show ~1970 ("57 years ago").
+  const ms = num < 1e12 ? num * 1000 : num;
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime()) || date.getFullYear() < 2000) return null;
+  return date.toISOString();
+}
+
 export function toProfile(record, extra = {}) {
-  const created = new Date((record.createdUnix ?? record.created_unix ?? 0) * 1000).toISOString();
+  const createdUnix = record.createdUnix ?? record.created_unix ?? 0;
+  const created = normalizePlayedAt(createdUnix) || new Date().toISOString();
   return {
     path: record.id,
     name: extra.name || record.name,
@@ -23,13 +39,16 @@ export function toProfile(record, extra = {}) {
     install_stage: record.installStage ?? record.install_stage ?? "installed",
     icon_path: extra.iconPath ?? extra.icon_path ?? record.iconPath ?? record.icon_path ?? null,
     iconDataUrl: extra.iconDataUrl ?? extra.icon_data_url ?? null,
-    last_played: record.lastPlayed ?? record.last_played ?? extra.lastPlayed ?? extra.last_played ?? null,
+    last_played: normalizePlayedAt(
+      record.lastPlayed ?? record.last_played ?? extra.lastPlayed ?? extra.last_played,
+    ),
     recent_time_played: extra.recentTimePlayed ?? extra.recent_time_played ?? 0,
     submitted_time_played: extra.submittedTimePlayed ?? extra.submitted_time_played ?? 0,
     ignored_updates: extra.ignoredUpdates ?? extra.ignored_updates ?? {},
     last_crash: extra.lastCrash ?? extra.last_crash ?? null,
     date_created: created,
     date_modified: created,
+    sort_order: record.sortOrder ?? record.sort_order ?? 0,
     groups: extra.groups ?? record.groups ?? [],
     linked_data: record.linkedData ?? record.linked_data ?? null,
     java_path: extra.javaPath ?? extra.java_path ?? null,
@@ -41,6 +60,12 @@ export function toProfile(record, extra = {}) {
     hooks: extra.hooks ?? { pre_launch: null, wrapper: null, post_exit: null },
     quick_servers: extra.quickServers ?? extra.quick_servers ?? [],
   };
+}
+
+/** Move a profile one step up or down in the library order. */
+export async function moveInstance(id, direction) {
+  const rows = await invoke("move_instance", { id, direction });
+  return Promise.all((rows ?? []).map((row) => withOptions(row)));
 }
 
 async function withOptions(record) {
@@ -74,10 +99,13 @@ export async function create(name, gameVersion, modloader, loaderVersion, iconPa
       javaMajor: null,
       skipInstall: !!skipInstall,
       autoOptimize: !!autoOptimize,
+      iconPath: iconPath || null,
     },
   });
   const profile = toProfile(record);
-  if (iconPath) {
+  // Local / data-URL icons: re-apply after install in case options were rewritten.
+  // Remote https icons are already downloaded in create_instance_and_install.
+  if (iconPath && !/^https?:\/\//i.test(String(iconPath))) {
     await edit_icon(profile.path, iconPath).catch(() => null);
   }
   await notifyProfile("Created", profile);

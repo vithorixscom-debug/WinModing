@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { ClearIcon, SearchIcon, ClientIcon, ServerIcon, XIcon, SettingsIcon } from '@modrinth/assets'
 import {
   Pagination,
@@ -150,6 +150,18 @@ if (route.query.ai) {
 }
 
 async function refreshSearch() {
+  loading.value = true
+  try {
+    await refreshSearchInner()
+  } catch (err) {
+    handleError(err)
+    results.value = { hits: [], total_hits: 0, limit: Number(maxResults.value) || 20, offset: 0 }
+  } finally {
+    loading.value = false
+  }
+}
+
+async function refreshSearchInner() {
   if (instanceContext.value?.path) {
     instanceProjects.value =
       (await getInstanceProjects(instanceContext.value.path).catch(handleError)) || {}
@@ -232,9 +244,10 @@ async function refreshSearch() {
     }
 
     if (hideAlreadyInstalled.value) {
-      const installedMods = Object.values(instanceProjects.value)
-        .filter((x) => x.metadata)
+      const installedMods = Object.values(instanceProjects.value || {})
+        .filter((x) => x?.metadata)
         .map((x) => x.metadata.project_id)
+        .filter(Boolean)
 
       installedMods.map((x) => [`project_id != ${x}`]).forEach((x) => formattedFacets.push(x))
     }
@@ -252,24 +265,28 @@ async function refreshSearch() {
     }
   }
 
-  const catalog = await get_catalog_results({
-    text: catalogQueryText(query.value || ''),
-    projectType: projectType.value === 'datapack' ? 'mod' : projectType.value,
-    limit: Number(maxResults.value) || 20,
-    offset,
-    gameVersion: selectedVersions.value[0] || instanceContext.value?.game_version || null,
-    loader:
-      instanceContext.value && !ignoreInstanceLoaders.value
-        ? instanceContext.value.loader
-        : orFacets.value
-            .map((item) => String(item).replace(/^categories:/, ''))
-            .find((item) => ['fabric', 'forge', 'quilt', 'neoforge'].includes(item.toLowerCase())) ||
-          null,
-    showBoth: catalogSource.value === 'both',
-    source: catalogSource.value,
-    duplicatePref: catalogSource.value === 'both' ? duplicatePref.value : 'modrinth',
-    index: sortType.value?.name || 'relevance',
-  }).catch((err) => {
+  const catalog = await Promise.race([
+    get_catalog_results({
+      text: catalogQueryText(query.value || ''),
+      projectType: projectType.value === 'datapack' ? 'mod' : projectType.value,
+      limit: Number(maxResults.value) || 20,
+      offset,
+      gameVersion: selectedVersions.value[0] || instanceContext.value?.game_version || null,
+      loader:
+        instanceContext.value && !ignoreInstanceLoaders.value
+          ? instanceContext.value.loader
+          : orFacets.value
+              .map((item) => String(item).replace(/^categories:/, ''))
+              .find((item) =>
+                ['fabric', 'forge', 'quilt', 'neoforge'].includes(item.toLowerCase()),
+              ) || null,
+      showBoth: catalogSource.value === 'both',
+      source: catalogSource.value,
+      duplicatePref: catalogSource.value === 'both' ? duplicatePref.value : 'modrinth',
+      index: sortType.value?.name || 'relevance',
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('catalog timeout')), 25000)),
+  ]).catch((err) => {
     handleError(err)
     return { items: [], warnings: [] }
   })
@@ -300,6 +317,12 @@ async function refreshSearch() {
     }
   }
   results.value = rawResults.result
+  try {
+    const { prefetchMedia } = await import('@/helpers/media.js')
+    prefetchMedia(hits.map((hit) => hit.icon_url).filter(Boolean))
+  } catch {
+    /* ignore */
+  }
 }
 
 async function onSearchChange(newPageNumber) {
@@ -325,7 +348,7 @@ async function persistCatalogSettings() {
   current.catalog_duplicate_pref = duplicatePref.value
   current.catalog_page_size = Number(maxResults.value) || 20
   current.show_both_catalogs = catalogSource.value === 'both'
-  await setSettings(current).catch(() => {})
+  await setSettings(current).catch(handleError)
 }
 
 const catalogSettingsModal = ref(null)
@@ -357,7 +380,7 @@ const searchWrapper = ref(null)
 async function onSearchChangeToTop(newPageNumber) {
   await onSearchChange(newPageNumber)
   await nextTick()
-  searchWrapper.value.scrollTo({ top: 0, behavior: 'smooth' })
+  searchWrapper.value?.scrollTo?.({ top: 0, behavior: 'smooth' })
 }
 
 async function clearSearch() {
@@ -449,11 +472,7 @@ function getSearchUrl(offset, useObj) {
 
 const sortedCategories = computed(() => {
   const values = new Map()
-  const list = Array.isArray(categories.value)
-    ? categories.value
-    : Array.isArray(categories.value?.value)
-      ? categories.value.value
-      : []
+  const list = Array.isArray(categories.value) ? categories.value : []
   const type = projectType.value === 'datapack' ? 'mod' : projectType.value
   for (const category of list.filter((cat) => cat && cat.project_type === type)) {
     const header = category.header || 'categories'
@@ -560,32 +579,39 @@ watch(
     sortType.value = { display: 'Relevance', name: 'relevance' }
     query.value = ''
 
-    loading.value = true
-    await clearFilters()
-    loading.value = false
+    try {
+      await clearFilters()
+    } catch (err) {
+      handleError(err)
+    }
   },
 )
 
-const [categories, loaders, availableGameVersions] = await Promise.all([
-  get_categories()
-    .catch(handleError)
-    .then((s) => sortByNameOrNumber(Array.isArray(s) ? s : [], ['header', 'name']))
-    .then(ref),
-  get_loaders().catch(handleError).then(ref),
-  Promise.resolve(ref([])),
-  refreshSearch(),
-])
-void get_game_versions()
-  .catch(() => [])
-  .then((versions) => {
-    availableGameVersions.value = versions
-  })
+// Do not await network here — Suspense would stick on «Загрузка…» while Modrinth/Millida hangs.
+const categories = ref([])
+const loaders = ref([])
+const availableGameVersions = ref([])
+
+onMounted(async () => {
+  const [cats, loads, versions] = await Promise.all([
+    get_categories()
+      .catch(handleError)
+      .then((s) => sortByNameOrNumber(Array.isArray(s) ? s : [], ['header', 'name'])),
+    get_loaders().catch(handleError),
+    get_game_versions().catch(() => []),
+  ])
+  categories.value = Array.isArray(cats) ? cats : []
+  loaders.value = Array.isArray(loads) ? loads : []
+  availableGameVersions.value = Array.isArray(versions) ? versions : []
+  await refreshSearch()
+})
 
 const filteredLoaders = computed(() => {
-  return loaders.value.filter((loader) => {
+  return (loaders.value || []).filter((loader) => {
+    const supported = loader?.supported_project_types?.[0]
     return projectType.value === 'mod' || projectType.value === 'modpack'
-      ? loader.supported_project_types[0] === 'mod'
-      : loader.supported_project_types[0] === projectType.value
+      ? supported === 'mod'
+      : supported === projectType.value
   })
 })
 
@@ -797,13 +823,6 @@ const isModProject = computed(() => ['modpack', 'mod'].includes(projectType.valu
           />
         </div>
       </Card>
-      <Pagination
-        :page="currentPage"
-        :count="pageCount"
-        :link-function="(x) => getSearchUrl(x <= 1 ? 0 : (x - 1) * maxResults)"
-        class="pagination-before"
-        @switch-page="onSearchChange"
-      />
       <section v-if="loading" class="offline">{{ i18n('instance.loading') }}</section>
       <section v-else-if="offline && results.total_hits === 0" class="offline">
         {{ i18n('browse.offline') }}
@@ -828,7 +847,7 @@ const isModProject = computed(() => ['modpack', 'mod'].includes(projectType.valu
           :installed="result.installed"
         />
       </section>
-      <pagination
+      <Pagination
         :page="currentPage"
         :count="pageCount"
         :link-function="(x) => getSearchUrl(x <= 1 ? 0 : (x - 1) * maxResults)"

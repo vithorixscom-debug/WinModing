@@ -245,7 +245,7 @@ const game_version = ref(null)
 const loader = ref('vanilla')
 const loader_version = ref('stable')
 const specified_loader_version = ref('')
-const auto_optimize = ref(false)
+const auto_optimize = ref(true)
 const { t: i18n } = useI18n()
 const icon = ref(null)
 const display_icon = ref(null)
@@ -266,7 +266,7 @@ defineExpose({
     showSnapshots.value = false
     loader.value = 'vanilla'
     loader_version.value = 'stable'
-    auto_optimize.value = false
+    auto_optimize.value = true
     icon.value = null
     display_icon.value = null
     isShowing.value = true

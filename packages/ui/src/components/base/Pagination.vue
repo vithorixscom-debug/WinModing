@@ -105,9 +105,13 @@ function switchPage(newPage: number) {
 <style scoped lang="scss">
 .pagination {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.25rem;
   min-height: 2.25rem;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .page-number-container {

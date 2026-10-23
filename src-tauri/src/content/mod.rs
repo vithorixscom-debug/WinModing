@@ -1885,33 +1885,40 @@ fn pick_curseforge_file(files: Vec<CfFile>, game_version: &str, loader: &str) ->
     files
         .into_iter()
         .filter(|item| !item.file_name.trim().is_empty())
-        .max_by_key(|item| {
-            let mut score = 0u8;
-            if !game.is_empty()
-                && item
-                    .game_versions
-                    .iter()
-                    .any(|value| value.eq_ignore_ascii_case(game))
-            {
-                score += 2;
-            }
-            if !loader.is_empty()
-                && loader != "vanilla"
-                && item.game_versions.iter().any(|value| {
-                    let lower = value.to_ascii_lowercase();
-                    lower == loader || lower.contains(&loader)
-                })
-            {
-                score += 2;
-            }
-            if item
-                .download_url
-                .as_deref()
-                .is_some_and(|value| !value.is_empty())
-            {
-                score += 1;
-            }
-            score
+        .max_by(|a, b| {
+            let score = |item: &CfFile| {
+                let mut score = 0i64;
+                if !game.is_empty()
+                    && item
+                        .game_versions
+                        .iter()
+                        .any(|value| value.eq_ignore_ascii_case(game))
+                {
+                    score += 100;
+                }
+                if !loader.is_empty()
+                    && loader != "vanilla"
+                    && item.game_versions.iter().any(|value| {
+                        let lower = value.to_ascii_lowercase();
+                        lower == loader || lower.contains(&loader)
+                    })
+                {
+                    score += 50;
+                }
+                if item
+                    .download_url
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+                {
+                    score += 10;
+                }
+                // Prefer newest file when scores tie (id grows over time; date as tie-break).
+                score += item.id as i64;
+                score
+            };
+            score(a)
+                .cmp(&score(b))
+                .then_with(|| a.file_date.cmp(&b.file_date))
         })
 }
 

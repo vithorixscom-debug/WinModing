@@ -41,6 +41,10 @@ enum ClientHop {
 }
 
 impl HttpPool {
+    pub fn primary(&self) -> &reqwest::Client {
+        &self.client
+    }
+
     pub fn new() -> Result<Self, LauncherError> {
         let discovered = discover_proxy_urls();
         let mut hops = vec![ClientHop::System];
@@ -103,6 +107,11 @@ impl HttpPool {
                     }
                     Err(err) => {
                         mark_skip_from_err(preferred, &err);
+                        // Dead sticky (e.g. api.modrinth.com on RU) must not stay preferred.
+                        if is_connect_like(&err) {
+                            clear_sticky_host(preferred);
+                            demote_family_of(preferred);
+                        }
                         skip = 1;
                     }
                 }
@@ -192,6 +201,49 @@ impl HttpPool {
         })
     }
 
+    pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, LauncherError> {
+        let mut last = None;
+        for candidate in with_sticky_host(with_demoted_mirror(usable_candidates(
+            alternate_urls(url, &[]),
+        ))) {
+            match self.get_bytes_once(&candidate).await {
+                Ok(bytes) => {
+                    remember_sticky_host(&candidate);
+                    return Ok(bytes);
+                }
+                Err(err) if err.should_try_mirror() => {
+                    mark_skip_from_err(&candidate, &err);
+                    if is_connect_like(&err) {
+                        demote_family_of(&candidate);
+                    }
+                    last = Some(err);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last.unwrap_or_else(|| LauncherError::Message(format!("image fetch failed: {url}"))))
+    }
+
+    async fn get_bytes_once(&self, url: &str) -> Result<Vec<u8>, LauncherError> {
+        let response = self.send(url, &[]).await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(LauncherError::Provider {
+                provider: host_of(url),
+                status: status.as_u16(),
+                body: "image fetch failed".into(),
+            });
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|source| LauncherError::Network {
+                url: url.to_string(),
+                source,
+            })?;
+        Ok(bytes.to_vec())
+    }
+
     pub async fn cached_text(
         &self,
         cache: &MetadataCache,
@@ -224,17 +276,36 @@ impl HttpPool {
         url: &str,
         form: &[(&str, &str)],
     ) -> Result<T, LauncherError> {
-        let response = self
-            .client
-            .post(url)
-            .form(&form)
-            .send()
-            .await
-            .map_err(|source| LauncherError::Network {
-                url: url.to_string(),
-                source,
-            })?;
-        self.read_json(url, response).await
+        let value = self.post_form_value(url, form).await?;
+        serde_json::from_value(value).map_err(|err| LauncherError::Auth {
+            reason: format!("bad JSON from {url}: {err}"),
+        })
+    }
+
+    /// POST form and parse JSON even when Microsoft returns 4xx (device-code poll).
+    /// Sequential hops only — OAuth `device_code` / auth codes are single-use and must
+    /// never be POSTed in parallel (AADSTS70000 "already been used").
+    pub async fn post_form_value(
+        &self,
+        url: &str,
+        form: &[(&str, &str)],
+    ) -> Result<serde_json::Value, LauncherError> {
+        let form_owned: Vec<(String, String)> = form
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        let body = PostBody::Form(form_owned);
+        let mut last = None;
+        for client in self.clients() {
+            match dispatch_post(client, url, &body, true).await {
+                Ok(value) => return Ok(value),
+                Err(err) if err.should_try_mirror() || matches!(err, LauncherError::Network { .. }) => {
+                    last = Some(err);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last.unwrap_or_else(|| LauncherError::Message(format!("POST failed: {url}"))))
     }
 
     pub async fn post_json<T: serde::de::DeserializeOwned>(
@@ -242,17 +313,18 @@ impl HttpPool {
         url: &str,
         body: &impl serde::Serialize,
     ) -> Result<T, LauncherError> {
-        let response = self
-            .client
-            .post(url)
-            .json(body)
-            .send()
-            .await
-            .map_err(|source| LauncherError::Network {
-                url: url.to_string(),
-                source,
-            })?;
-        self.read_json(url, response).await
+        let payload = serde_json::to_value(body).map_err(|err| LauncherError::Message(err.to_string()))?;
+        let value = self
+            .post_across_hops(url, PostBody::Json(payload), false)
+            .await?;
+        serde_json::from_value(value).map_err(|err| LauncherError::Auth {
+            reason: format!("bad JSON from {url}: {err}"),
+        })
+    }
+
+    /// Rebuild clients so a VPN toggled after startup is picked up (WinINet / local SOCKS).
+    pub fn refresh_proxies(&self) -> Result<Self, LauncherError> {
+        Self::new()
     }
 
     pub async fn download_to(&self, url: &str, dest: &Path) -> Result<(), LauncherError> {
@@ -505,6 +577,95 @@ impl HttpPool {
                 url: url.to_string(),
                 source,
             })
+    }
+
+    /// POST over every proxy hop in parallel; first usable JSON wins.
+    /// `allow_error_body` keeps Microsoft device-code 4xx JSON (authorization_pending).
+    async fn post_across_hops(
+        &self,
+        url: &str,
+        body: PostBody,
+        allow_error_body: bool,
+    ) -> Result<serde_json::Value, LauncherError> {
+        let hop_count = 1 + self.alts.len();
+        if hop_count <= 1 {
+            return dispatch_post(&self.client, url, &body, allow_error_body).await;
+        }
+        let mut pending = FuturesUnordered::new();
+        for index in 0..hop_count {
+            let http = self.clone();
+            let url = url.to_string();
+            let body = body.clone();
+            pending.push(async move {
+                let client = http.clients().nth(index).expect("http hop").clone();
+                dispatch_post(&client, &url, &body, allow_error_body).await
+            });
+        }
+        let mut last = None;
+        while let Some(item) = pending.next().await {
+            match item {
+                Ok(value) => return Ok(value),
+                Err(err) if err.should_try_mirror() || matches!(err, LauncherError::Network { .. }) => {
+                    last = Some(err);
+                }
+                Err(err) => {
+                    // Keep racing other hops on transient auth HTTP, but surface hard auth errors.
+                    if is_auth_hard_fail(&err) {
+                        return Err(err);
+                    }
+                    last = Some(err);
+                }
+            }
+        }
+        Err(last.unwrap_or_else(|| LauncherError::Message(format!("POST failed: {url}"))))
+    }
+}
+
+#[derive(Clone)]
+enum PostBody {
+    Form(Vec<(String, String)>),
+    Json(serde_json::Value),
+}
+
+async fn dispatch_post(
+    client: &reqwest::Client,
+    url: &str,
+    body: &PostBody,
+    allow_error_body: bool,
+) -> Result<serde_json::Value, LauncherError> {
+    let request = match body {
+        PostBody::Form(form) => client.post(url).form(form),
+        PostBody::Json(json) => client.post(url).json(json),
+    };
+    let response = request.send().await.map_err(|source| LauncherError::Network {
+        url: url.to_string(),
+        source,
+    })?;
+    let status = response.status();
+    let text = response.text().await.map_err(|source| LauncherError::Network {
+        url: url.to_string(),
+        source,
+    })?;
+    if !status.is_success() && !allow_error_body {
+        return Err(LauncherError::Auth {
+            reason: format!("HTTP {} from {url}: {}", status.as_u16(), trim_body(&text)),
+        });
+    }
+    serde_json::from_str(&text).map_err(|err| LauncherError::Auth {
+        reason: format!("bad JSON from {url}: {err} ({})", trim_body(&text)),
+    })
+}
+
+fn is_auth_hard_fail(err: &LauncherError) -> bool {
+    match err {
+        LauncherError::Auth { reason } => {
+            let lower = reason.to_lowercase();
+            lower.contains("invalid_grant")
+                || lower.contains("access_denied")
+                || lower.contains("expired")
+                || lower.contains("unauthorized")
+        }
+        _ => false,
     }
 }
 
@@ -770,10 +931,11 @@ fn normalize_proxy_url(value: &str) -> String {
 }
 
 const MODRINTH_API_PREFIXES: &[&str] = &[
-    "https://api.modrinth.com",
-    "https://staging-api.modrinth.com",
+    // RF: official api.modrinth.com often resets TLS — try relay first.
     MILLIDA_MR,
     "https://mod.mcimirror.top/modrinth",
+    "https://api.modrinth.com",
+    "https://staging-api.modrinth.com",
 ];
 
 const CURSEFORGE_API_PREFIXES: &[&str] = &[
@@ -810,6 +972,13 @@ const MILLIDA_FILE_HOSTS: &[&str] = &[
     "launcher.mojang.com",
     "libraries.minecraft.net",
     "resources.download.minecraft.net",
+    "mc-heads.net",
+    "crafatar.com",
+    "minotar.net",
+    "crafthead.net",
+    "visage.surgeplay.com",
+    "sessionserver.mojang.com",
+    "textures.minecraft.net",
 ];
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -986,6 +1155,14 @@ fn remember_sticky_host(url: &str) {
     }
 }
 
+fn clear_sticky_host(url: &str) {
+    let family = host_family(url);
+    if let Ok(mut memory) = net_memory().lock() {
+        memory.sticky.remove(family);
+        save_net_memory(&memory);
+    }
+}
+
 fn with_sticky_host(mut candidates: Vec<String>) -> Vec<String> {
     let Some(first) = candidates.first() else {
         return candidates;
@@ -1140,6 +1317,16 @@ fn alternate_urls(url: &str, extra_headers: &[(&str, &str)]) -> Vec<String> {
             url.replace("mediafilez.forgecdn.net", "media.forgecdn.net"),
         );
     }
+    if url.contains("media.forgecdn.net") {
+        push_unique(
+            &mut out,
+            url.replace("media.forgecdn.net", "mediafilez.forgecdn.net"),
+        );
+        push_unique(
+            &mut out,
+            url.replace("media.forgecdn.net", "edge.forgecdn.net"),
+        );
+    }
     if url.contains("github.com") || url.contains("githubusercontent.com") {
         push_unique(&mut out, format!("https://ghfast.top/{url}"));
         push_unique(&mut out, format!("https://gh-proxy.com/{url}"));
@@ -1263,13 +1450,11 @@ mod tests {
     fn modrinth_picks_official_and_mirrors() {
         let url = "https://api.modrinth.com/v2/search?query=sodium";
         let order = alternate_urls(url, &[]);
+        assert!(order[0].starts_with("https://api.millida.net/v2/launcher/mr/"));
         assert!(order.iter().any(|item| item.starts_with(url)));
         assert!(order
             .iter()
             .any(|item| item.contains("staging-api.modrinth.com")));
-        assert!(order.iter().any(|item| item.starts_with(
-            "https://api.millida.net/v2/launcher/mr/v2/search?query=sodium"
-        )));
         assert!(order
             .iter()
             .any(|item| item.contains("mod.mcimirror.top/modrinth/v2/search")));

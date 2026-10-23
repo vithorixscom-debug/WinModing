@@ -17,11 +17,17 @@ export default defineConfig({
   plugins: [
     vue(),
     svgLoader({
+      defaultImport: "component",
       svgoConfig: {
         plugins: [
           {
             name: "preset-default",
-            params: { overrides: { removeViewBox: false } },
+            params: {
+              overrides: {
+                removeViewBox: false,
+                convertColors: false,
+              },
+            },
           },
         ],
       },

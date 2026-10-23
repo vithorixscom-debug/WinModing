@@ -1,5 +1,6 @@
 <script setup>
-import { Card, Avatar, Button } from '@modrinth/ui'
+import { Card, Button } from '@modrinth/ui'
+import ProxiedAvatar from '@/components/ui/ProxiedAvatar.vue'
 import { DownloadIcon, HeartIcon, CalendarIcon } from '@modrinth/assets'
 import { formatNumber, formatCategory } from '@modrinth/utils'
 import { computed, ref } from 'vue'
@@ -32,6 +33,22 @@ const updatedLabel = computed(() => {
   return formatCategory(parsed.fromNow())
 })
 
+const bannerImage = computed(
+  () => props.project.featured_gallery ?? props.project.gallery?.[0] ?? null,
+)
+
+function openProject() {
+  const id = props.project.project_id || props.project.id || props.project.slug
+  if (!id) return
+  router.push({
+    path: `/project/${encodeURIComponent(id)}/`,
+    query: {
+      i: props.instance ? props.instance.path : undefined,
+      source: props.project.source || undefined,
+    },
+  })
+}
+
 const install = async (e) => {
   e?.stopPropagation()
   installing.value = true
@@ -39,7 +56,7 @@ const install = async (e) => {
     props.project.project_id,
     null,
     props.instance ? props.instance.path : null,
-    'ProjectCard',
+    props.project.source || null,
     () => {
       installing.value = false
     },
@@ -50,14 +67,12 @@ const install = async (e) => {
 
 <template>
   <div class="wrapper">
-    <Card class="project-card button-base" @click="router.push(`/project/${project.slug}`)">
+    <Card class="project-card button-base" @click="openProject">
       <div
         class="banner"
         :style="{
           'background-color': 'var(--color-button-bg)',
-          'background-image': project.featured_gallery ?? project.gallery[0]
-            ? `url(${project.featured_gallery ?? project.gallery[0]})`
-            : 'none',
+          'background-image': bannerImage ? `url(${bannerImage})` : 'none',
         }"
       >
         <div class="badges">
@@ -78,16 +93,16 @@ const install = async (e) => {
         <div
           class="badges-wrapper"
           :class="{
-            'no-image': !project.featured_gallery && !project.gallery[0],
+            'no-image': !bannerImage,
           }"
           :style="{
-            background: !project.featured_gallery && !project.gallery[0]
+            background: !bannerImage
               ? 'linear-gradient(rgba(22,24,28,0.08), 65%, rgba(22,24,28,0.35))'
               : null,
           }"
         ></div>
       </div>
-      <Avatar class="icon" size="sm" :src="project.icon_url" />
+      <ProxiedAvatar class="icon" size="sm" :src="project.icon_url" :tint-by="project.slug || project.project_id" />
       <div class="title">
         <div class="title-text">
           {{ project.title }}

@@ -127,12 +127,19 @@ function updatePixelated() {
 
 <style lang="scss" scoped>
 .avatar {
-  @apply min-w-[--_size] min-h-[--_size] w-[--_size] h-[--_size];
   --_size: 2rem;
+  width: var(--_size) !important;
+  height: var(--_size) !important;
+  min-width: var(--_size) !important;
+  min-height: var(--_size) !important;
+  max-width: var(--_size) !important;
+  max-height: var(--_size) !important;
 
   border: 1px solid var(--color-button-border);
   background-color: var(--color-button-bg);
   object-fit: cover;
+  overflow: hidden;
+  flex-shrink: 0;
   border-radius: calc(16 / 96 * var(--_size));
 
   &.circle {

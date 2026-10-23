@@ -16,9 +16,10 @@ import { Button, Card, DropdownSelect } from '@modrinth/ui'
 import { formatCategoryHeader } from '@modrinth/utils'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import dayjs from 'dayjs'
-import { duplicate, remove } from '@/helpers/profile.js'
+import { duplicate, remove, moveInstance } from '@/helpers/profile.js'
 import { handleError } from '@/store/notifications.js'
 import ConfirmModalWrapper from '@/components/ui/modal/ConfirmModalWrapper.vue'
+import { emit } from '@tauri-apps/api/event'
 
 const props = defineProps({
   instances: {
@@ -31,7 +32,12 @@ const props = defineProps({
     type: String,
     default: '',
   },
+  compact: {
+    type: Boolean,
+    default: true,
+  },
 })
+const emitReorder = defineEmits(['reordered'])
 const instanceOptions = ref(null)
 const instanceComponents = ref(null)
 
@@ -120,14 +126,28 @@ const handleOptionsClick = async (args) => {
 }
 
 const search = ref('')
-const group = ref('Category')
+const group = ref('None')
 const filters = ref('All profiles')
-const sortBy = ref('Name')
+const sortBy = ref('Manual order')
+
+async function moveProfile(path, direction) {
+  await moveInstance(path, direction).catch(handleError)
+  try {
+    await emit('profile', { event: 'edited', path, profile_path: path })
+  } catch {
+    /* ignore */
+  }
+  emitReorder('reordered')
+}
 
 const filteredResults = computed(() => {
   let instances = props.instances.filter((instance) => {
     return instance.name.toLowerCase().includes(search.value.toLowerCase())
   })
+
+  if (sortBy.value === 'Manual order') {
+    instances.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+  }
 
   if (sortBy.value === 'Name') {
     instances.sort((a, b) => {
@@ -251,7 +271,7 @@ const filteredResults = computed(() => {
         v-model="sortBy"
         class="sort-dropdown"
         name="Sort Dropdown"
-        :options="['Name', 'Last played', 'Date created', 'Date modified', 'Game version']"
+        :options="['Manual order', 'Name', 'Last played', 'Date created', 'Date modified', 'Game version']"
         placeholder="Select..."
       />
     </div>
@@ -288,12 +308,17 @@ const filteredResults = computed(() => {
       <p>{{ instanceSection.key }}</p>
       <hr aria-hidden="true" />
     </div>
-    <section class="instances">
+    <section class="instances" :class="{ compact: compact }">
       <Instance
-        v-for="instance in instanceSection.value"
+        v-for="(instance, index) in instanceSection.value"
         ref="instanceComponents"
         :key="instance.path + instance.install_stage"
         :instance="instance"
+        :compact="compact"
+        :can-move-up="sortBy === 'Manual order' && index > 0"
+        :can-move-down="sortBy === 'Manual order' && index < instanceSection.value.length - 1"
+        @move-up="moveProfile(instance.path, 'up')"
+        @move-down="moveProfile(instance.path, 'down')"
         @contextmenu.prevent.stop="(event) => handleRightClick(event, instance.path)"
       />
     </section>
@@ -389,5 +414,10 @@ const filteredResults = computed(() => {
   margin-right: auto;
   scroll-behavior: smooth;
   overflow-y: auto;
+
+  &.compact {
+    grid-template-columns: repeat(auto-fill, minmax(18.5rem, 1fr));
+    gap: 0.75rem;
+  }
 }
 </style>

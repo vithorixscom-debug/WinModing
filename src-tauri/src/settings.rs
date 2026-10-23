@@ -3,22 +3,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::{io_at, LauncherError};
 use crate::paths::AppPaths;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
 pub struct HookSettings {
     pub pre_launch: Option<String>,
     pub wrapper: Option<String>,
     pub post_exit: Option<String>,
-}
-
-impl Default for HookSettings {
-    fn default() -> Self {
-        Self {
-            pre_launch: None,
-            wrapper: None,
-            post_exit: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

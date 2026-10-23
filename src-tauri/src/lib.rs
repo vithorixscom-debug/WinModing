@@ -13,6 +13,9 @@ mod content;
 mod discord;
 mod domain;
 mod error;
+mod facegen;
+mod server_ping;
+mod servers_catalog;
 mod hashutil;
 mod java;
 mod launch;
@@ -22,6 +25,7 @@ mod paths;
 mod protocol;
 mod providers;
 mod settings;
+mod skins;
 mod state;
 mod window;
 
@@ -69,6 +73,7 @@ pub fn run() {
             commands::list_saved_catalog,
             commands::open_downloads_folder,
             commands::list_instances,
+            commands::move_instance,
             commands::create_instance,
             commands::create_instance_and_install,
             commands::list_game_versions,
@@ -117,6 +122,20 @@ pub fn run() {
             commands::save_instance_icon_png,
             commands::list_icon_gallery,
             commands::read_image_data_url,
+            commands::player_face,
+            commands::player_face_remember,
+            commands::proxy_media,
+            commands::server_status,
+            commands::list_recommended_servers,
+            commands::list_skins,
+            commands::save_skin,
+            commands::delete_skin,
+            commands::set_skin_slim,
+            commands::fetch_skin_url,
+            commands::ms_skin_profile,
+            commands::ms_apply_skin,
+            commands::ms_set_cape,
+            commands::ms_reset_skin,
             commands::analyze_crash,
             commands::add_play_seconds,
             commands::ignore_mod_update,

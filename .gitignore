@@ -22,5 +22,9 @@ ref/
 .cursor/
 .idea/
 *.pdb
+*.exe
+!.github/
 .tmp-milda/
+.tmp-milda2/
 .tmp-noctrinth/
+.tmp-modrinth/

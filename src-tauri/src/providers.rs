@@ -391,12 +391,60 @@ fn annotate_page(mut items: Vec<UnifiedMod>) -> Vec<UnifiedMod> {
             item.also_listed_on = Some(*source);
         }
     }
+    fill_incomplete_fields(&mut items);
     items
+}
+
+/// First provider that answered may miss icon/summary; borrow from the twin listing.
+fn fill_incomplete_fields(items: &mut [UnifiedMod]) {
+    let donors: Vec<(String, Option<String>, String)> = items
+        .iter()
+        .map(|item| {
+            (
+                normalize_title(&item.name),
+                item.icon_url.clone(),
+                item.summary.clone(),
+            )
+        })
+        .collect();
+    for item in items.iter_mut() {
+        let key = normalize_title(&item.name);
+        let needs_icon = item
+            .icon_url
+            .as_deref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true);
+        let needs_summary = item.summary.trim().is_empty();
+        if !needs_icon && !needs_summary {
+            continue;
+        }
+        for (name, icon, summary) in &donors {
+            if name != &key {
+                continue;
+            }
+            if needs_icon {
+                if let Some(url) = icon.as_deref().filter(|value| !value.trim().is_empty()) {
+                    item.icon_url = Some(url.to_string());
+                }
+            }
+            if needs_summary && !summary.trim().is_empty() {
+                item.summary = summary.clone();
+            }
+        }
+    }
+}
+
+fn force_https_url(url: Option<String>) -> Option<String> {
+    let raw = url?.trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    Some(raw.replacen("http://", "https://", 1))
 }
 
 fn cf_mod_to_unified(hit: CfMod) -> UnifiedMod {
     let author = hit.authors.first().map(|author| author.name.clone());
-    let icon = hit.logo.and_then(|logo| logo.thumbnail_url.or(logo.url));
+    let icon = force_https_url(hit.logo.and_then(|logo| logo.thumbnail_url.or(logo.url)));
     let (versions, loaders) = versions_and_loaders(&hit.latest_files_indexes);
     UnifiedMod {
         id: format!("{CURSEFORGE_ID_PREFIX}{}", hit.id),

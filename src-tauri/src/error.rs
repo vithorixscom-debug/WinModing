@@ -99,9 +99,11 @@ impl LauncherError {
             }
             Self::Message(text) => text.contains("network request"),
             Self::Provider { status, .. } => {
+                // Include 404/410 so CDN host swaps (cdn ↔ cdn-alt, forgecdn mirrors) can run.
                 matches!(
                     *status,
-                    0 | 401 | 403 | 408 | 429 | 451 | 500 | 502 | 503 | 504 | 522 | 523 | 530
+                    0 | 401 | 403 | 404 | 408 | 410 | 429 | 451 | 500 | 502 | 503 | 504 | 522
+                        | 523 | 530
                 )
             }
             _ => false,

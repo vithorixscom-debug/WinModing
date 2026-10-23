@@ -134,6 +134,8 @@ pub struct InstanceRecord {
     pub loader_version: Option<String>,
     pub java_major: Option<u32>,
     pub created_unix: i64,
+    #[serde(default)]
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +150,9 @@ pub struct CreateInstanceRequest {
     pub skip_install: bool,
     #[serde(default)]
     pub auto_optimize: bool,
+    /// Optional path/data URL applied as instance icon.png at create time.
+    #[serde(default)]
+    pub icon_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +172,12 @@ pub struct AccountView {
     pub kind: String,
     pub username: String,
     pub uuid: String,
+    /// True when a real Minecraft/Microsoft access token is present (not a UI stub).
+    #[serde(default)]
+    pub session_ok: bool,
+    /// Launch `user_type`: `msa` | `mojang` | `legacy`.
+    #[serde(default)]
+    pub user_type: String,
 }
 
 #[derive(Debug, Clone)]
@@ -182,12 +193,79 @@ pub struct StoredAccount {
 
 impl StoredAccount {
     pub fn view(&self) -> AccountView {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let token_live = !self.access_token.is_empty()
+            && self.access_token != "0"
+            && self.access_token.len() > 20;
+        let not_expired = self
+            .expires_unix
+            .map(|expires| expires > now - 60)
+            .unwrap_or(token_live);
+        let (session_ok, user_type) = match self.kind.as_str() {
+            "microsoft" => (token_live && not_expired, "msa".to_string()),
+            "ely" => (token_live, "mojang".to_string()),
+            _ => (false, "legacy".to_string()),
+        };
         AccountView {
             id: self.id.clone(),
             kind: self.kind.clone(),
             username: self.username.clone(),
             uuid: self.uuid.clone(),
+            session_ok,
+            user_type,
         }
+    }
+}
+
+#[cfg(test)]
+mod account_view_tests {
+    use super::*;
+
+    #[test]
+    fn microsoft_session_ok_requires_real_token() {
+        let ok = StoredAccount {
+            id: "msa-1".into(),
+            kind: "microsoft".into(),
+            username: "Steve".into(),
+            uuid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            access_token: "a".repeat(64),
+            refresh_token: Some("r".into()),
+            expires_unix: Some(i64::MAX),
+        }
+        .view();
+        assert!(ok.session_ok);
+        assert_eq!(ok.user_type, "msa");
+
+        let bad = StoredAccount {
+            id: "msa-2".into(),
+            kind: "microsoft".into(),
+            username: "Alex".into(),
+            uuid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            access_token: "0".into(),
+            refresh_token: None,
+            expires_unix: None,
+        }
+        .view();
+        assert!(!bad.session_ok);
+    }
+
+    #[test]
+    fn offline_is_legacy_not_session_ok() {
+        let view = StoredAccount {
+            id: "offline-1".into(),
+            kind: "offline".into(),
+            username: "Pirate".into(),
+            uuid: "cccccccccccccccccccccccccccccccc".into(),
+            access_token: "0".into(),
+            refresh_token: None,
+            expires_unix: None,
+        }
+        .view();
+        assert!(!view.session_ok);
+        assert_eq!(view.user_type, "legacy");
     }
 }
 

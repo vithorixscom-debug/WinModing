@@ -42,6 +42,22 @@ export default new createRouter({
       },
     },
     {
+      path: '/skins',
+      name: 'Skins',
+      component: Pages.Skins,
+      meta: {
+        breadcrumb: [{ name: 'Skins' }],
+      },
+    },
+    {
+      path: '/servers',
+      name: 'Servers',
+      component: Pages.Servers,
+      meta: {
+        breadcrumb: [{ name: 'Servers' }],
+      },
+    },
+    {
       path: '/project/:id',
       name: 'Project',
       component: Project.Index,

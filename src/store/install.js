@@ -70,6 +70,29 @@ export const install = async (
   const catalog = detectCatalog(projectId, source, projectHint)
   const projectType = projectHint.project_type || projectHint.projectType || 'mod'
   if (!instancePath) {
+    // Modpacks become a new profile with the pack's icon — not a raw downloads dump.
+    if (String(projectType).toLowerCase() === 'modpack') {
+      try {
+        const { install: packInstall } = await import('@/helpers/pack.js')
+        const title = projectHint.title || projectHint.name || projectId
+        const icon = projectHint.icon_url || projectHint.iconUrl || null
+        const path = await packInstall(projectId, versionId, title, icon)
+        try {
+          const notifs = useNotifications()
+          notifs.addNotification({
+            title: t('install.savedTitle'),
+            text: path || title,
+            type: 'success',
+          })
+        } catch {
+          /* ignore */
+        }
+        callback(versionId || 'latest')
+      } catch (error) {
+        handleError(error)
+      }
+      return
+    }
     try {
       const saved = await invoke('save_catalog_download', {
         request: {

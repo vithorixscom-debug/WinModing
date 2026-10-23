@@ -45,6 +45,15 @@ const props = defineProps({
   },
 })
 
+const emit = defineEmits(['click'])
+
+function handleClick(event) {
+  emit('click', event)
+  if (typeof props.action === 'function') {
+    props.action(event)
+  }
+}
+
 const accentedButton = computed(() =>
   ['danger', 'primary', 'red', 'orange', 'green', 'blue', 'purple', 'gray'].includes(props.color),
 )
@@ -80,13 +89,7 @@ const classes = computed(() => {
     :class="classes"
     :to="link"
     :target="external ? '_blank' : '_self'"
-    @click="
-      (event) => {
-        if (action) {
-          action(event)
-        }
-      }
-    "
+    @click="handleClick"
   >
     <slot />
     <ExternalIcon v-if="external && !iconOnly" class="external-icon" />
@@ -98,19 +101,13 @@ const classes = computed(() => {
     :class="classes"
     :href="link"
     :target="external ? '_blank' : '_self'"
-    @click="
-      (event) => {
-        if (action) {
-          action(event)
-        }
-      }
-    "
+    @click="handleClick"
   >
     <slot />
     <ExternalIcon v-if="external && !iconOnly" class="external-icon" />
     <UnknownIcon v-if="!$slots.default" />
   </a>
-  <button v-else class="btn" :class="classes" @click="action">
+  <button v-else class="btn" :class="classes" @click="handleClick">
     <slot />
     <UnknownIcon v-if="!$slots.default" />
   </button>

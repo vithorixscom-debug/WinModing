@@ -85,6 +85,27 @@ defineExpose({
     }
     profiles.value = profilesVal
 
+    // One compatible profile — install immediately, no picker.
+    const compatible = profilesVal.filter((profile) => {
+      const loaders = versions.value.flatMap((v) => v.loaders)
+      return (
+        versions.value.flatMap((v) => v.game_versions).includes(profile.game_version) &&
+        (project.value.project_type === 'mod'
+          ? loaders.includes(profile.loader) || loaders.includes('minecraft')
+          : true)
+      )
+    })
+    if (compatible.length === 1) {
+      const only = compatible[0]
+      if (only.installedMod) {
+        onInstall.value?.(versions.value[0]?.id)
+        return
+      }
+      await install(only)
+      if (installModal.value) installModal.value.hide()
+      return
+    }
+
     installModal.value.show()
   },
 })

@@ -98,10 +98,53 @@ function toBackend(settings) {
     javaPaths,
     showBothCatalogs: String(settings.catalog_source || "").toLowerCase() === "both",
     catalogSource: settings.catalog_source || "modrinth",
-    catalogDuplicatePref: settings.catalog_duplicate_pref || "modrinth",
+    catalogDuplicatePref: settings.catalog_duplicate_pref || "both",
     catalogPageSize: Number(settings.catalog_page_size) || 20,
     customDir: settings.custom_dir || null,
   };
+}
+
+const UI_ONLY_KEY = "winmoding.ui.settings";
+const CATALOG_KEY = "winmoding.catalog.prefs";
+
+function readUiOnly() {
+  try {
+    return JSON.parse(localStorage.getItem(UI_ONLY_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function readCatalogPrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(CATALOG_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUiOnly(settings) {
+  const prev = readUiOnly();
+  const patch = {
+    ...prev,
+    theme: settings.theme ?? prev.theme ?? "dark",
+    onboarded: settings.onboarded !== false,
+    collapsed_navigation: settings.collapsed_navigation !== false,
+    advanced_rendering: settings.advanced_rendering !== false,
+    native_decorations: !!settings.native_decorations,
+    default_page: settings.default_page || prev.default_page || "Home",
+  };
+  localStorage.setItem(UI_ONLY_KEY, JSON.stringify(patch));
+}
+
+function writeCatalogPrefs(settings) {
+  const patch = {
+    catalog_source: settings.catalog_source || "modrinth",
+    catalog_duplicate_pref: settings.catalog_duplicate_pref || "both",
+    catalog_page_size: Number(settings.catalog_page_size) || 20,
+    show_both_catalogs: String(settings.catalog_source || "").toLowerCase() === "both",
+  };
+  localStorage.setItem(CATALOG_KEY, JSON.stringify(patch));
 }
 
 export async function get() {
@@ -109,17 +152,35 @@ export async function get() {
     const remote = await invoke("get_launcher_settings");
     const dir = await invoke("app_directory").catch(() => null);
     const settings = fromBackend(remote);
+    const ui = readUiOnly();
+    const catalog = readCatalogPrefs();
+    Object.assign(settings, ui);
+    // Catalog prefs: localStorage wins if present (survives backend write misses).
+    if (catalog.catalog_source) settings.catalog_source = catalog.catalog_source;
+    if (catalog.catalog_duplicate_pref) {
+      settings.catalog_duplicate_pref = catalog.catalog_duplicate_pref;
+    }
+    if (catalog.catalog_page_size) {
+      settings.catalog_page_size = Number(catalog.catalog_page_size) || settings.catalog_page_size;
+    }
+    if (typeof catalog.show_both_catalogs === "boolean") {
+      settings.show_both_catalogs = catalog.show_both_catalogs;
+    }
+    settings.show_both_catalogs =
+      String(settings.catalog_source || "").toLowerCase() === "both";
     const path = String(settings.custom_dir || dir || "").trim();
     settings.custom_dir = path || null;
     settings.loaded_config_dir = String(dir || path || "").trim() || null;
     return settings;
   } catch {
-    return frontendDefaults();
+    return { ...frontendDefaults(), ...readUiOnly(), ...readCatalogPrefs() };
   }
 }
 
 export async function set(settings) {
-  await invoke("set_launcher_settings", { settings: toBackend(settings) }).catch(() => {});
+  writeUiOnly(settings);
+  writeCatalogPrefs(settings);
+  await invoke("set_launcher_settings", { settings: toBackend(settings) });
 }
 
 export async function cancel_directory_change() {}

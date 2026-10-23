@@ -115,6 +115,64 @@ const handleClose = async () => {
   right: 0;
   z-index: 9999;
   display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.2rem 0.35rem 0 0;
+
+  gap: 0.45rem;
+  padding: 0.25rem 0.5rem 0 0;
+
+  button {
+    position: relative;
+    width: 3.15rem;
+    height: 3.15rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent !important;
+    box-shadow: none !important;
+
+    svg {
+      width: 1.25rem;
+      height: 1.25rem;
+    }
+
+    &::before {
+      content: '';
+      position: absolute;
+      z-index: -1;
+      left: 50%;
+      top: 50%;
+      translate: -50% -50%;
+      width: 2.75rem;
+      height: 2.75rem;
+      border-radius: 999999px;
+      background: transparent;
+      scale: 0.88;
+      transition: all ease-in-out 0.2s;
+    }
+
+    &:hover::before,
+    &:active::before {
+      background-color: var(--color-button-bg);
+      scale: 1;
+    }
+
+    &:last-child::before {
+      width: 3rem;
+      height: 3rem;
+    }
+
+    &:last-child:hover,
+    &:last-child:active {
+      color: var(--color-accent-contrast);
+
+      &::before {
+        background-color: var(--color-red);
+        scale: 1;
+      }
+    }
+  }
 }
 
 .app-logo-wrapper {

@@ -5761,7 +5761,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winmoding"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5770,6 +5770,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "hex",
+ "image",
  "log",
  "md-5",
  "rand 0.8.8",

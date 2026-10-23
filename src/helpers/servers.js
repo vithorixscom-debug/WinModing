@@ -1,41 +1,27 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from '@tauri-apps/api/core'
 
-function normalize(list) {
-  if (!Array.isArray(list)) return [];
-  return list
-    .map((item) => ({
-      id: String(item.id || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`),
-      name: String(item.name || item.address || "").trim(),
-      address: String(item.address || "").trim(),
-    }))
-    .filter((item) => item.address);
+/**
+ * Recommended servers: Modrinth Server Projects first (via RF/MR relay),
+ * then the public rating catalogue with full settings.
+ */
+export async function listRecommendedServers(opts = {}) {
+  const page = await invoke('list_recommended_servers', {
+    query: opts.query || null,
+    limit: opts.limit ?? 30,
+    offset: opts.offset ?? 0,
+    sort: opts.sort || 'rating',
+    category: opts.category || null,
+    version: opts.version || null,
+  })
+  return {
+    servers: Array.isArray(page?.servers) ? page.servers : [],
+    total: Number(page?.total || 0),
+    limit: Number(page?.limit || 0),
+    offset: Number(page?.offset || 0),
+    source: page?.source || 'catalog',
+  }
 }
 
-export async function listInstanceServers(instanceId) {
-  if (!instanceId) return [];
-  const extra = (await invoke("instance_options", { id: instanceId }).catch(() => ({}))) ?? {};
-  const stored = extra.quickServers ?? extra.quick_servers;
-  return normalize(stored);
-}
-
-export async function saveInstanceServers(instanceId, servers) {
-  const extra = (await invoke("instance_options", { id: instanceId }).catch(() => ({}))) ?? {};
-  extra.quickServers = normalize(servers);
-  await invoke("save_instance_options", { id: instanceId, options: extra });
-  return extra.quickServers;
-}
-
-export async function addInstanceServer(instanceId, { name, address }) {
-  const servers = await listInstanceServers(instanceId);
-  servers.unshift({
-    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-    name: String(name || address).trim(),
-    address: String(address || "").trim(),
-  });
-  return saveInstanceServers(instanceId, servers);
-}
-
-export async function removeInstanceServer(instanceId, id) {
-  const servers = (await listInstanceServers(instanceId)).filter((item) => item.id !== id);
-  return saveInstanceServers(instanceId, servers);
+export async function serverStatus(address) {
+  return invoke('server_status', { address })
 }

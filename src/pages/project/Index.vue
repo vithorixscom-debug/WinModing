@@ -20,7 +20,7 @@
         </router-link>
       </Card>
       <Card class="sidebar-card" @contextmenu.prevent.stop="handleRightClick">
-        <Avatar size="md" :src="data.icon_url" />
+        <ProxiedAvatar size="md" :src="data.icon_url" :tint-by="data.slug || data.id" />
         <div class="instance-info">
           <h2 class="name">{{ data.title }}</h2>
           {{ data.description }}
@@ -219,6 +219,10 @@
         :installed-version="installedVersion"
       />
     </div>
+    <div v-else class="project-missing">
+      <h2>Project not found</h2>
+      <p>This project could not be loaded from the catalog.</p>
+    </div>
   </div>
   <ContextMenu ref="options" @option-clicked="handleOptionsClick">
     <template #install> <DownloadIcon /> Install </template>
@@ -243,7 +247,8 @@ import {
   GlobeIcon,
   ClipboardCopyIcon,
 } from '@modrinth/assets'
-import { Categories, EnvironmentIndicator, Card, Avatar, Button, NavRow } from '@modrinth/ui'
+import { Categories, EnvironmentIndicator, Card, Button, NavRow } from '@modrinth/ui'
+import ProxiedAvatar from '@/components/ui/ProxiedAvatar.vue'
 import { formatNumber } from '@modrinth/utils'
 import {
   BuyMeACoffeeIcon,
@@ -293,13 +298,22 @@ async function fetchProjectData() {
     project = await invoke('get_catalog_project', { id: String(route.params.id) }).catch(handleError)
   }
   data.value = project
+  versions.value = []
+  members.value = []
+  installed.value = false
+  installedVersion.value = null
 
   instance.value = route.query.i ? await getInstance(route.query.i).catch(handleError) : null
   instanceProjects.value = route.query.i
     ? await getInstanceProjects(route.query.i).catch(handleError)
     : null
 
-  const source = project?.source || sourceHint || 'modrinth'
+  if (!project) {
+    breadcrumbs.setName('Project', String(route.params.id || 'Project'))
+    return
+  }
+
+  const source = project.source || sourceHint || 'modrinth'
   const gameVersion = instance.value?.game_version || ''
   const loader = instance.value?.loader || 'fabric'
 
@@ -311,7 +325,7 @@ async function fetchProjectData() {
       loader,
     }).catch(handleError)
   } else {
-    versions.value = await get_version_many(project.versions, 'must_revalidate').catch(handleError)
+    versions.value = await get_version_many(project.versions || [], 'must_revalidate').catch(handleError)
     members.value = project.team ? await get_team(project.team).catch(handleError) : []
   }
   categories.value = await get_categories().catch(handleError)
@@ -333,7 +347,7 @@ async function fetchProjectData() {
       installedVersion.value = installedFile.metadata.version_id
     }
   }
-  breadcrumbs.setName('Project', data.value.title)
+  breadcrumbs.setName('Project', data.value.title || data.value.name || String(route.params.id))
 }
 
 await fetchProjectData()
@@ -344,7 +358,7 @@ watch(
   async () => {
     if (route.params.id && route.path.startsWith('/project')) {
       await fetchProjectData()
-      promo.value.scroll()
+      promo.value?.scroll?.()
     }
   },
 )
@@ -404,6 +418,16 @@ const handleOptionsClick = (args) => {
   display: flex;
   flex-direction: row;
   min-height: 100%;
+}
+
+.project-missing {
+  padding: 2rem 1.5rem;
+  color: var(--color-secondary);
+
+  h2 {
+    margin: 0 0 0.5rem;
+    color: var(--color-contrast);
+  }
 }
 
 .project-sidebar {

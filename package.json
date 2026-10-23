@@ -1,7 +1,7 @@
 {
   "name": "winmoding",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
@@ -34,6 +34,7 @@
     "ofetch": "^1.4.1",
     "pinia": "^2.3.1",
     "qrcode.vue": "^3.4.1",
+    "skinview3d": "^3.0.1",
     "vue": "^3.5.13",
     "vue-multiselect": "3.0.0",
     "vue-router": "^4.5.0",
